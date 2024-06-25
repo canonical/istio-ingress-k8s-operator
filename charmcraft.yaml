@@ -1,0 +1,33 @@
+name: istio-ingress-k8s
+type: charm
+title: Istio Ingress
+summary: A Juju charm to deploy and manage ingresses
+description: |
+  Istio Ingress is a Juju charm for managing Istio ingress gateways in Kubernetes clusters.
+  It automates deployment and configuration, providing secure and reliable traffic routing.
+assumes:
+  - k8s-api
+
+bases:
+  - build-on:
+    - name: ubuntu
+      channel: "22.04"
+      architectures: ["amd64"]
+    run-on:
+    - name: ubuntu
+      channel: "22.04"
+      architectures: ["amd64"]
+  - build-on:
+    - name: ubuntu
+      channel: "22.04"
+      architectures: ["arm64"]
+    run-on:
+    - name: ubuntu
+      channel: "22.04"
+      architectures: ["arm64"]
+
+provides:
+  ingress:
+    interface: ingress
+    description: |
+      Provides ingress-like routing to the related Juju application, load-balancing across all units
