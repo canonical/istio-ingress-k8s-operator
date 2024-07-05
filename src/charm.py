@@ -29,9 +29,9 @@ from models import (
     Rule,
     URLRewriteFilter,
 )
+from ops import BlockedStatus
 from ops.charm import (
     CharmBase,
-    RelationEvent,
 )
 from ops.main import main
 from ops.model import (
@@ -43,7 +43,6 @@ logger = logging.getLogger(__name__)
 
 GATEWAY_RESOURCE = "gateway"
 HTTPROUTE_RESOURCE = "http_route"
-
 
 
 class IngressSetupError(Exception):
@@ -63,9 +62,13 @@ class IstioIngressCharm(CharmBase):
 
     def __init__(self, *args):
         super().__init__(*args)
+
+        self.owner_labels = {"owner": f"{self.model.name}-{self.app.name}"}
+        self.managed_name = f"{self.app.name}-istio"
+
         self.ingress_per_appv2 = IPAv2(charm=self)
         self.crd_manager = KubernetesCRDManager()
-        self.owner_labels = {"owner": f"{self.model.name}-{self.app.name}"}
+
         self.framework.observe(self.on.start, self._on_start)
         self.framework.observe(self.on.remove, self._on_remove)
         self.framework.observe(
@@ -75,17 +78,9 @@ class IstioIngressCharm(CharmBase):
             self.ingress_per_appv2.on.data_removed, self._on_ingress_data_removed
         )
 
-    def _on_remove(self, _):
-        """Event handler for remove."""
-        self.unit.status = MaintenanceStatus("Removing istio-ingress Gateway")
-        self.crd_manager.delete_resource(
-            resource_type=GATEWAY_RESOURCE, name=self.app.name, namespace=self.model.name
-        )
-
     def _on_start(self, _):
         """Event handler for start."""
-        self.unit.status = MaintenanceStatus("Setting up istio-ingress Gateway")
-
+        self.unit.status = MaintenanceStatus("Setting up global istio-ingress gateway")
         global_gateway = GatewayResource(
             metadata=Metadata(
                 name=self.app.name, namespace=self.model.name, labels=self.owner_labels
@@ -99,51 +94,84 @@ class IstioIngressCharm(CharmBase):
             spec_dict=global_gateway.spec.dict(),
         )
 
-        # Wait for the deployment and LoadBalancer
-        self._wait_for_deployment_and_lb()
+        self.unit.status = MaintenanceStatus("Validating gateway readiness")
+
+        if not self._is_deployment_ready():
+            self.unit.status = BlockedStatus(
+                "Gateway k8s deployment not ready, is istio properly installed?"
+            )
+
+        if not self._is_load_balancer_ready():
+            self.unit.status = BlockedStatus(
+                "Gateway load balancer is unable to obtain an IP or hostname from the cluster."
+            )
+
         self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
 
-    def _wait_for_deployment_and_lb(self):
-        """Wait for the deployment to be ready and a LoadBalancer to be created."""
-        deployment_ready = False
-        lb_ready = False
+    def _on_remove(self, _):
+        """Event handler for remove."""
+        # Removing tailing ingresses
+        tailing_routes = self.crd_manager.get_resource_by_labels(
+            resource_type=HTTPROUTE_RESOURCE, label_selector=self.owner_labels
+        )
+        for route in tailing_routes:
+            self.crd_manager.delete_resource(
+                name=route["name"],
+                namespace=route["namespace"],
+                resource_type=route["resource_type"],
+            )
 
-        while not (deployment_ready and lb_ready):
-            time.sleep(10)  # Wait a bit before checking again
+        # Removing tailing global gateway
+        self.crd_manager.delete_resource(
+            resource_type=GATEWAY_RESOURCE, name=self.app.name, namespace=self.model.name
+        )
 
-            # Check if the deployment is ready
+    def _is_deployment_ready(self) -> bool:
+        """Check if the deployment is ready after 10 attempts."""
+        attempts = 10
+
+        for _ in range(attempts):
+            time.sleep(10)
+
             try:
                 deployment = self.crd_manager.client.get(
-                    Deployment, name=f"{self.app.name}-istio", namespace=self.model.name
+                    Deployment, name=self.managed_name, namespace=self.model.name
                 )
-                if deployment.status.readyReplicas == deployment.status.replicas:
-                    deployment_ready = True
-            except Exception as e:
-                logger.error(f"Error checking deployment status: {e}")
+                if (
+                    deployment.status
+                    and deployment.status.readyReplicas == deployment.status.replicas
+                ):
+                    return True
+            except ApiError as e:
+                logger.error(f"Error checking gateway deployment status: {e}")
 
-            # Check if the LoadBalancer is created
-            try:
-                lb_service = self.crd_manager.client.get(
-                    Service, name=f"{self.app.name}-istio", namespace=self.model.name
-                )
-                if lb_service.spec.type == "LoadBalancer":
-                    lb_ready = True
-            except Exception as e:
-                logger.error(f"Error checking Service status: {e}")
+        return False
 
-    def _on_ingress_data_provided(self, event: RelationEvent):
+    def _is_load_balancer_ready(self) -> bool:
+        """Wait for the LoadBalancer to be created."""
+        attempts = 10
+
+        for _ in range(attempts):
+            time.sleep(10)
+
+            lb_status = _get_loadbalancer_status(
+                namespace=self.model.name, service_name=self.managed_name
+            )
+            if lb_status:
+                return True
+        return False
+
+    def _on_ingress_data_provided(self, _):
         """Handle a unit providing data requesting IPU."""
-        self.unit.status = MaintenanceStatus("Setting up an ingress")
-        self._sync_ingress_resources(event.relation)
+        self._sync_ingress_resources()
         self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
 
-    def _on_ingress_data_removed(self, event: RelationEvent):
+    def _on_ingress_data_removed(self, _):
         """Handle a unit removing the data needed to provide ingress."""
-        self.unit.status = MaintenanceStatus("Setting up an ingress")
-        self._sync_ingress_resources(event.relation)
+        self._sync_ingress_resources()
         self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
 
-    def _sync_ingress_resources(self, event: RelationEvent):
+    def _sync_ingress_resources(self):
         current_ingresses = []
 
         for rel in self.model.relations["ingress"]:
@@ -152,18 +180,17 @@ class IstioIngressCharm(CharmBase):
                 logger.debug(f"Provider {rel} not ready; resetting ingress configurations.")
                 self.ingress_per_appv2.wipe_ingress_data(rel)
                 continue
-                # raise IngressSetupError(
-                #     f"Provider is not ready or using unknown version: ingress for {rel} wiped."
-                # )
 
             if not rel.app:
-                logger.error(f"No app on relation {rel}")
+                logger.error(f"No app on relation {rel}, Skipping ingress configuration.")
                 continue
 
             try:
                 data = self.ingress_per_appv2.get_data(rel)
             except DataValidationError as e:
-                logger.error(f"Invalid data shared through {rel}... Error: {e}.")
+                logger.error(
+                    f"Data validation error for relation {rel}: {e}. Skipping ingress configuration."
+                )
                 continue
 
             prefix = self._generate_prefix(data.app.dict(by_alias=True))
@@ -179,15 +206,13 @@ class IstioIngressCharm(CharmBase):
                 "backend_svc": data.app.name,
                 "backend_port": data.app.port,
             }
-            current_ingresses.append((rel, ingress_data))
-            if self.unit.is_leader():
-                external_url = self._generate_external_url(prefix)
-                logger.debug(f"Publishing external URL for {rel.app.name}: {external_url}")
-                self.ingress_per_appv2.publish_url(rel, external_url)
+            if rel.active:
+                current_ingresses.append((rel, ingress_data))
 
         routes_to_delete = self.crd_manager.find_resources_to_delete(
             incoming_resources=[ingress_data for _, ingress_data in current_ingresses],
             owner_label=self.owner_labels,
+            resource_type=HTTPROUTE_RESOURCE,
         )
 
         for route in routes_to_delete:
@@ -269,9 +294,7 @@ class IstioIngressCharm(CharmBase):
         If the gateway isn't available or doesn't have a load balancer address yet,
         returns None. Only use this directly when external_host is allowed to be None.
         """
-        return _get_loadbalancer_status(
-            namespace=self.model.name, service_name=f"{self.app.name}-istio"
-        )
+        return _get_loadbalancer_status(namespace=self.model.name, service_name=self.managed_name)
 
     @staticmethod
     def _generate_prefix(data: Dict[str, Any]) -> str:
@@ -297,7 +320,7 @@ def _get_loadbalancer_status(namespace: str, service_name: str) -> Optional[str]
     if not (ingress_address := ingress_addresses[0]):
         return None
 
-    return ingress_address.ip
+    return ingress_address.hostname or ingress_address.ip
 
 
 if __name__ == "__main__":
