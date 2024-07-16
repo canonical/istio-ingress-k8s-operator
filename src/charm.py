@@ -43,8 +43,7 @@ from ops.model import (
 )
 
 logger = logging.getLogger(__name__)
-GATEWAY_RESOURCE = "gateway"
-HTTPROUTE_RESOURCE = "http_route"
+
 GATEWAY_RESOURCE_TYPES = {
     create_namespaced_resource("gateway.networking.k8s.io", "v1", "Gateway", "gateways"),
 }
@@ -57,10 +56,6 @@ INGRESS_RESOURCE_TYPES = {
 }
 GATEWAY_LABEL = "istio-gateway"
 INGRESS_LABEL = "istio-ingress"
-
-
-class IngressSetupError(Exception):
-    """Error setting up ingress for some requirer."""
 
 
 class DataValidationError(RuntimeError):
@@ -137,16 +132,6 @@ class IstioIngressCharm(CharmBase):
         krm.reconcile(resources_list)
 
         self.unit.status = MaintenanceStatus("Validating gateway readiness")
-
-        if not self._is_deployment_ready():
-            self.unit.status = BlockedStatus(
-                "Gateway k8s deployment not ready, is istio properly installed?"
-            )
-
-        if not self._is_load_balancer_ready():
-            self.unit.status = BlockedStatus(
-                "Gateway load balancer is unable to obtain an IP or hostname from the cluster."
-            )
 
         if self._is_ready():
             self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
