@@ -148,7 +148,8 @@ class IstioIngressCharm(CharmBase):
                 "Gateway load balancer is unable to obtain an IP or hostname from the cluster."
             )
 
-        self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
+        if self._is_ready():
+            self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
 
     def _on_remove(self, _):
         """Event handler for remove."""
@@ -161,13 +162,15 @@ class IstioIngressCharm(CharmBase):
 
     def _on_ingress_data_provided(self, _):
         """Handle a unit providing data requesting IPU."""
-        self._sync_ingress_resources()
-        self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
+        if self._is_ready():
+            self._sync_ingress_resources()
+            self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
 
     def _on_ingress_data_removed(self, _):
         """Handle a unit removing the data needed to provide ingress."""
-        self._sync_ingress_resources()
-        self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
+        if self._is_ready():
+            self._sync_ingress_resources()
+            self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
 
     def _is_deployment_ready(self) -> bool:
         """Check if the deployment is ready after 10 attempts."""
@@ -203,6 +206,21 @@ class IstioIngressCharm(CharmBase):
             if lb_status:
                 return True
         return False
+
+    def _is_ready(self) -> bool:
+
+        if not self._is_deployment_ready():
+            self.unit.status = BlockedStatus(
+                "Gateway k8s deployment not ready, is istio properly installed?"
+            )
+            return False
+        if not self._is_load_balancer_ready():
+            self.unit.status = BlockedStatus(
+                "Gateway load balancer is unable to obtain an IP or hostname from the cluster."
+            )
+            return False
+
+        return True
 
     def _construct_gateway(self):
         gateway = GatewayResource(
