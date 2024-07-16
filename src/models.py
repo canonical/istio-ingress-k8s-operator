@@ -103,7 +103,7 @@ class Rule(BaseModel):
 
     matches: List[Match]
     backendRefs: List[BackendRef]  # noqa: N815
-    filters: Optional[List[URLRewriteFilter]] = None
+    filters: Optional[List[URLRewriteFilter]] = []
 
 
 class HTTPRouteResourceSpec(BaseModel):

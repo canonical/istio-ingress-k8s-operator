@@ -8,8 +8,6 @@ from urllib.parse import urlparse
 
 import pytest
 import yaml
-from pytest_operator.plugin import OpsTest
-
 from conftest import (
     assert_can_connect,
     get_relation_data,
@@ -19,6 +17,7 @@ from helpers import (
     get_k8s_service_address,
     remove_application,
 )
+from pytest_operator.plugin import OpsTest
 
 logger = logging.getLogger(__name__)
 

@@ -1,12 +1,7 @@
 ops ~= 2.5
 pydantic>=2
 
-# Lightweight k8s module
-# Code: https://github.com/gtsystem/lightkube
-# Docs: https://lightkube.readthedocs.io/
-# Deps: charm, observability_libs
-lightkube >= 0.15.3
-lightkube-models >= 1.30.0.8
+lightkube-extensions @ git+https://github.com/canonical/lightkube-extensions.git@add-initial-helpers
 
 # An implementation of the JSON Schema specification
 # Code: https://github.com/python-jsonschema/jsonschema

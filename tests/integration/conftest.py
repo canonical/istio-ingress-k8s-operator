@@ -2,7 +2,6 @@
 # See LICENSE file for licensing details.
 
 
-from datetime import datetime
 import functools
 import logging
 import os
@@ -11,6 +10,7 @@ import socket
 import subprocess
 from collections import defaultdict
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
@@ -70,7 +70,7 @@ async def istio_ingress_charm(ops_test: OpsTest):
             charm = await ops_test.build_charm(".", verbosity="debug")
             return charm
         except RuntimeError:
-            logger.warning("Failed to build traefik. Trying again!")
+            logger.warning("Failed to build istio-ingress. Trying again!")
             count += 1
 
             if count == 3:
@@ -154,9 +154,9 @@ def get_unit_info(unit_name: str, model: str = None) -> dict:
 
      for example:
 
-    traefik-k8s/0:
+    istio-ingress-k8s/0:
       opened-ports: []
-      charm: local:focal/traefik-k8s-1
+      charm: local:focal/istio-ingress-k8s-1
       leader: true
       relation-info:
       - endpoint: ingress-per-unit
@@ -170,7 +170,7 @@ def get_unit_info(unit_name: str, model: str = None) -> dict:
               egress-subnets: 10.152.183.150/32
               ingress-address: 10.152.183.150
               private-address: 10.152.183.150
-      provider-id: traefik-k8s-0
+      provider-id: istio-ingress-k8s-0
       address: 10.1.232.144
     """
     cmd = f"juju show-unit {unit_name}".split(" ")
@@ -238,7 +238,7 @@ def get_relation_data(
 ):
     """Get relation databags for a juju relation.
 
-    >>> get_relation_data('prometheus/0:ingress', 'traefik/1:ingress-per-unit')
+    >>> get_relation_data('prometheus/0:ingress', 'istio-ingress/1:ingress-per-unit')
     """
     provider_data = get_content(
         provider_endpoint, requirer_endpoint, include_default_juju_keys, model

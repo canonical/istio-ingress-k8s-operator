@@ -26,6 +26,11 @@ bases:
       channel: "22.04"
       architectures: ["arm64"]
 
+parts:
+  charm:
+    plugin: charm
+    build-packages: [git]
+
 provides:
   ingress:
     interface: ingress
