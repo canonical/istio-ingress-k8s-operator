@@ -21,10 +21,10 @@ from lightkube.resources.core_v1 import Service
 from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
 from models import (
     BackendRef,
-    GatewayResource,
-    GatewaySpec,
     HTTPRouteResource,
     HTTPRouteResourceSpec,
+    IstioGatewayResource,
+    IstioGatewaySpec,
     Match,
     Metadata,
     ParentRef,
@@ -44,15 +44,28 @@ from ops.model import (
 
 logger = logging.getLogger(__name__)
 
-GATEWAY_RESOURCE_TYPES = {
-    create_namespaced_resource("gateway.networking.k8s.io", "v1", "Gateway", "gateways"),
-}
-INGRESS_RESOURCE_TYPES = {
-    create_namespaced_resource("gateway.networking.k8s.io", "v1", "GRPCRoute", "grpcroutes"),
-    create_namespaced_resource(
+
+RESOURCE_TYPES = {
+    "Gateway": create_namespaced_resource(
+        "gateway.networking.k8s.io", "v1", "Gateway", "gateways"
+    ),
+    "HTTPRoute": create_namespaced_resource(
+        "gateway.networking.k8s.io", "v1", "HTTPRoute", "httproutes"
+    ),
+    "GRPCRoute": create_namespaced_resource(
+        "gateway.networking.k8s.io", "v1", "GRPCRoute", "grpcroutes"
+    ),
+    "ReferenceGrant": create_namespaced_resource(
         "gateway.networking.k8s.io", "v1beta1", "ReferenceGrant", "referencegrants"
     ),
-    create_namespaced_resource("gateway.networking.k8s.io", "v1", "HTTPRoute", "httproutes"),
+}
+
+
+GATEWAY_RESOURCE_TYPES = {RESOURCE_TYPES["Gateway"]}
+INGRESS_RESOURCE_TYPES = {
+    RESOURCE_TYPES["GRPCRoute"],
+    RESOURCE_TYPES["ReferenceGrant"],
+    RESOURCE_TYPES["HTTPRoute"],
 }
 GATEWAY_LABEL = "istio-gateway"
 INGRESS_LABEL = "istio-ingress"
@@ -74,6 +87,7 @@ class IstioIngressCharm(CharmBase):
 
         self.managed_name = f"{self.app.name}-istio"
         self._lightkube_field_manager: str = self.app.name
+        self._lightkube_client = None
 
         self.ingress_per_appv2 = IPAv2(charm=self)
 
@@ -89,7 +103,11 @@ class IstioIngressCharm(CharmBase):
     @property
     def lightkube_client(self):
         """Returns a lightkube client configured for this charm."""
-        return Client(namespace=self.model.name, field_manager=self._lightkube_field_manager)
+        if self._lightkube_client is None:
+            self._lightkube_client = Client(
+                namespace=self.model.name, field_manager=self._lightkube_field_manager
+            )
+        return self._lightkube_client
 
     def _get_gateway_resource_manager(self):
         return KubernetesResourceManager(
@@ -111,30 +129,9 @@ class IstioIngressCharm(CharmBase):
             logger=logger,
         )
 
-    @property
-    def _get_gateway_resource(self):
-        return create_namespaced_resource("gateway.networking.k8s.io", "v1", "Gateway", "gateways")
-
-    @property
-    def _get_httproute_resource(self):
-        return create_namespaced_resource(
-            "gateway.networking.k8s.io", "v1", "HTTPRoute", "httproutes"
-        )
-
     def _on_config_changed(self, _):
         """Event handler for config changed."""
-        resources_list = []
-        krm = self._get_gateway_resource_manager()
-
-        self.unit.status = MaintenanceStatus("Setting up global istio-ingress gateway")
-        resource_to_append = self._construct_gateway()
-        resources_list.append(resource_to_append)
-        krm.reconcile(resources_list)
-
-        self.unit.status = MaintenanceStatus("Validating gateway readiness")
-
-        if self._is_ready():
-            self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
+        self._sync_all_resources()
 
     def _on_remove(self, _):
         """Event handler for remove."""
@@ -147,23 +144,17 @@ class IstioIngressCharm(CharmBase):
 
     def _on_ingress_data_provided(self, _):
         """Handle a unit providing data requesting IPU."""
-        if self._is_ready():
-            self._sync_ingress_resources()
-            self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
+        self._sync_all_resources()
 
     def _on_ingress_data_removed(self, _):
         """Handle a unit removing the data needed to provide ingress."""
-        if self._is_ready():
-            self._sync_ingress_resources()
-            self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
+        self._sync_all_resources()
 
     def _is_deployment_ready(self) -> bool:
         """Check if the deployment is ready after 10 attempts."""
         attempts = 10
 
         for _ in range(attempts):
-            time.sleep(10)
-
             try:
                 deployment = self.lightkube_client.get(
                     Deployment, name=self.managed_name, namespace=self.model.name
@@ -176,6 +167,8 @@ class IstioIngressCharm(CharmBase):
             except ApiError as e:
                 logger.error(f"Error checking gateway deployment status: {e}")
 
+            time.sleep(10)
+
         return False
 
     def _is_load_balancer_ready(self) -> bool:
@@ -183,13 +176,13 @@ class IstioIngressCharm(CharmBase):
         attempts = 10
 
         for _ in range(attempts):
-            time.sleep(10)
-
             lb_status = _get_loadbalancer_status(
                 namespace=self.model.name, service_name=self.managed_name
             )
             if lb_status:
                 return True
+
+            time.sleep(10)
         return False
 
     def _is_ready(self) -> bool:
@@ -208,14 +201,14 @@ class IstioIngressCharm(CharmBase):
         return True
 
     def _construct_gateway(self):
-        gateway = GatewayResource(
+        gateway = IstioGatewayResource(
             metadata=Metadata(
                 name=self.app.name,
                 namespace=self.model.name,
             ),
-            spec=GatewaySpec(),
+            spec=IstioGatewaySpec(),
         )
-        gateway_resource = self._get_gateway_resource
+        gateway_resource = RESOURCE_TYPES["Gateway"]
         return gateway_resource(
             metadata=ObjectMeta.from_dict(gateway.metadata.dict()),
             spec=gateway.spec.dict(),
@@ -249,11 +242,31 @@ class IstioIngressCharm(CharmBase):
                 ],
             ),
         )
-        http_resource = self._get_httproute_resource
+        http_resource = RESOURCE_TYPES["HTTPRoute"]
         return http_resource(
             metadata=ObjectMeta.from_dict(http_route.metadata.dict()),
             spec=http_route.spec.dict(),
         )
+
+    def _sync_all_resources(self):
+        self._sync_gateway_resources()
+
+        self.unit.status = MaintenanceStatus("Validating gateway readiness")
+
+        if self._is_ready():
+            try:
+                self._sync_ingress_resources()
+                self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
+            except DataValidationError or ApiError:
+                self.unit.status = BlockedStatus("Issue with setting up an ingress")
+
+    def _sync_gateway_resources(self):
+        resources_list = []
+        krm = self._get_gateway_resource_manager()
+
+        resource_to_append = self._construct_gateway()
+        resources_list.append(resource_to_append)
+        krm.reconcile(resources_list)
 
     def _sync_ingress_resources(self):
         current_ingresses = []
@@ -332,11 +345,11 @@ def _get_loadbalancer_status(namespace: str, service_name: str) -> Optional[str]
     except ApiError:
         return None
 
-    if not (status := service.status):
+    if not (status := getattr(service, "status", None)):
         return None
-    if not (load_balancer_status := status.loadBalancer):
+    if not (load_balancer_status := getattr(status, "loadBalancer", None)):
         return None
-    if not (ingress_addresses := load_balancer_status.ingress):
+    if not (ingress_addresses := getattr(load_balancer_status, "ingress", None)):
         return None
     if not (ingress_address := ingress_addresses[0]):
         return None

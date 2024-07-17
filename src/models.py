@@ -35,18 +35,18 @@ class Listener(BaseModel):
     allowedRoutes: AllowedRoutes = AllowedRoutes()  # noqa: N815
 
 
-class GatewaySpec(BaseModel):
+class IstioGatewaySpec(BaseModel):
     """GatewaySpec defines the specification of a gateway."""
 
     gatewayClassName: str = "istio"  # noqa: N815
     listeners: List[Listener] = Field(default_factory=lambda: [Listener()])
 
 
-class GatewayResource(BaseModel):
+class IstioGatewayResource(BaseModel):
     """GatewayResource defines the structure of a Gateway Kubernetes resource."""
 
     metadata: Metadata
-    spec: GatewaySpec
+    spec: IstioGatewaySpec
 
 
 # HTTPRoute schema
