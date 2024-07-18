@@ -6,7 +6,7 @@
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 
 # Global metadata schema
@@ -23,23 +23,23 @@ class Metadata(BaseModel):
 class AllowedRoutes(BaseModel):
     """AllowedRoutes defines namespaces from which traffic is allowed."""
 
-    namespaces: Dict[str, str] = {"from": "All"}
+    namespaces: Dict[str, str]
 
 
 class Listener(BaseModel):
     """Listener defines a port and protocol configuration."""
 
-    name: str = "default"
-    port: int = 80
-    protocol: str = "HTTP"
-    allowedRoutes: AllowedRoutes = AllowedRoutes()  # noqa: N815
+    name: str
+    port: int
+    protocol: str
+    allowedRoutes: AllowedRoutes  # noqa: N815
 
 
 class IstioGatewaySpec(BaseModel):
     """GatewaySpec defines the specification of a gateway."""
 
-    gatewayClassName: str = "istio"  # noqa: N815
-    listeners: List[Listener] = Field(default_factory=lambda: [Listener()])
+    gatewayClassName: str  # noqa: N815
+    listeners: List[Listener]
 
 
 class IstioGatewayResource(BaseModel):

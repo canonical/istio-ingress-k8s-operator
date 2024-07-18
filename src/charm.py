@@ -5,7 +5,6 @@
 
 """Istio Ingress Charm."""
 
-import functools
 import logging
 import time
 from typing import Any, Dict, Optional
@@ -20,11 +19,13 @@ from lightkube.resources.apps_v1 import Deployment
 from lightkube.resources.core_v1 import Service
 from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
 from models import (
+    AllowedRoutes,
     BackendRef,
     HTTPRouteResource,
     HTTPRouteResourceSpec,
     IstioGatewayResource,
     IstioGatewaySpec,
+    Listener,
     Match,
     Metadata,
     ParentRef,
@@ -176,14 +177,32 @@ class IstioIngressCharm(CharmBase):
         attempts = 10
 
         for _ in range(attempts):
-            lb_status = _get_loadbalancer_status(
-                namespace=self.model.name, service_name=self.managed_name
-            )
+            lb_status = self._get_lb_status
             if lb_status:
                 return True
 
             time.sleep(10)
         return False
+
+    @property
+    def _get_lb_status(self) -> Optional[str]:
+        try:
+            lb = self.lightkube_client.get(
+                Service, name=self.managed_name, namespace=self.model.name
+            )
+        except ApiError:
+            return None
+
+        if not (status := getattr(lb, "status", None)):
+            return None
+        if not (load_balancer_status := getattr(status, "loadBalancer", None)):
+            return None
+        if not (ingress_addresses := getattr(load_balancer_status, "ingress", None)):
+            return None
+        if not (ingress_address := ingress_addresses[0]):
+            return None
+
+        return ingress_address.hostname or ingress_address.ip
 
     def _is_ready(self) -> bool:
 
@@ -206,7 +225,17 @@ class IstioIngressCharm(CharmBase):
                 name=self.app.name,
                 namespace=self.model.name,
             ),
-            spec=IstioGatewaySpec(),
+            spec=IstioGatewaySpec(
+                gatewayClassName="istio",
+                listeners=[
+                    Listener(
+                        name="default",
+                        port=80,
+                        protocol="HTTP",
+                        allowedRoutes=AllowedRoutes(namespaces={"from": "All"}),
+                    )
+                ],
+            ),
         )
         gateway_resource = RESOURCE_TYPES["Gateway"]
         return gateway_resource(
@@ -270,6 +299,7 @@ class IstioIngressCharm(CharmBase):
 
     def _sync_ingress_resources(self):
         current_ingresses = []
+        relation_mappings = {}
         if not self.unit.is_leader():
             raise RuntimeError("Ingress can only be provided on the leader unit.")
 
@@ -277,28 +307,27 @@ class IstioIngressCharm(CharmBase):
         for rel in self.model.relations["ingress"]:
 
             if not self.ingress_per_appv2.is_ready(rel):
-                logger.debug(f"Provider {rel} not ready; resetting ingress configurations.")
                 self.ingress_per_appv2.wipe_ingress_data(rel)
                 continue
 
-            try:
-                data = self.ingress_per_appv2.get_data(rel)
-            except DataValidationError as e:
-                logger.error(f"Data validation error for relation {rel}: {e}.")
-                raise e
-
+            data = self.ingress_per_appv2.get_data(rel)
             prefix = self._generate_prefix(data.app.dict(by_alias=True))
             resource_to_append = self._construct_httproute(data, prefix)
 
             if rel.active:
                 current_ingresses.append(resource_to_append)
+                external_url = self._generate_external_url(prefix)
+                relation_mappings[rel] = external_url
 
-            self.ingress_per_appv2.wipe_ingress_data(rel)
-            external_url = self._generate_external_url(prefix)
-            logger.debug(f"Publishing external URL for {rel.app.name}: {external_url}")
-            self.ingress_per_appv2.publish_url(rel, external_url)
+        try:
+            krm.reconcile(current_ingresses)
+            for relation, url in relation_mappings.items():
+                self.ingress_per_appv2.wipe_ingress_data(relation)
+                logger.debug(f"Publishing external URL for {relation.app.name}: {url}")
+                self.ingress_per_appv2.publish_url(relation, url)
 
-        krm.reconcile(current_ingresses)
+        except ApiError:
+            raise
 
     def _generate_external_url(self, prefix: str) -> str:
         """Generate external URL for the ingress."""
@@ -328,33 +357,13 @@ class IstioIngressCharm(CharmBase):
         If the gateway isn't available or doesn't have a load balancer address yet,
         returns None. Only use this directly when external_host is allowed to be None.
         """
-        return _get_loadbalancer_status(namespace=self.model.name, service_name=self.managed_name)
+        return self._get_lb_status
 
     @staticmethod
     def _generate_prefix(data: Dict[str, Any]) -> str:
         """Generate prefix for the ingress configuration."""
         name = data["name"].replace("/", "-")
         return f"/{data['model']}-{name}"
-
-
-@functools.lru_cache
-def _get_loadbalancer_status(namespace: str, service_name: str) -> Optional[str]:
-    client = Client()
-    try:
-        service = client.get(Service, name=service_name, namespace=namespace)
-    except ApiError:
-        return None
-
-    if not (status := getattr(service, "status", None)):
-        return None
-    if not (load_balancer_status := getattr(status, "loadBalancer", None)):
-        return None
-    if not (ingress_addresses := getattr(load_balancer_status, "ingress", None)):
-        return None
-    if not (ingress_address := ingress_addresses[0]):
-        return None
-
-    return ingress_address.hostname or ingress_address.ip
 
 
 if __name__ == "__main__":
