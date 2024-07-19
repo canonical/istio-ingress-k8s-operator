@@ -1,2 +1,14 @@
 ops ~= 2.5
 pydantic>=2
+
+
+# A collection of helpers and shared code for using Lightkube
+# Code: https://github.com/canonical/lightkube-extensions
+# Deps: charm
+lightkube-extensions @ git+https://github.com/canonical/lightkube-extensions.git@main
+
+# An implementation of the JSON Schema specification
+# Code: https://github.com/python-jsonschema/jsonschema
+# Docs: https://python-jsonschema.readthedocs.io/
+# Deps: traefik_k8s libs
+jsonschema >= 4.22.0

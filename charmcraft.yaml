@@ -26,6 +26,22 @@ bases:
       channel: "22.04"
       architectures: ["arm64"]
 
+parts:
+  charm:
+    plugin: charm
+    build-packages: [git]
+
+config:
+  options:
+    ready-timeout:
+      type: int
+      default: 100
+      description: >
+        The maximum time (in seconds) to wait for the gateway deployment to be 
+        ready. This applies specifically to the deployment/LB created for the Istio 
+        gateway controller. If the deployment does not become ready within this time, 
+        charm will go into blocked state.
+
 provides:
   ingress:
     interface: ingress
