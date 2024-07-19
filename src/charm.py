@@ -137,11 +137,11 @@ class IstioIngressCharm(CharmBase):
     def _on_remove(self, _):
         """Event handler for remove."""
         # Removing tailing ingresses
-        kim = self._get_ingress_resource_manager()
-        kim.delete()
+        krm = self._get_ingress_resource_manager()
+        krm.delete()
 
-        kgm = self._get_gateway_resource_manager()
-        kgm.delete()
+        krm = self._get_gateway_resource_manager()
+        krm.delete()
 
     def _on_ingress_data_provided(self, _):
         """Handle a unit providing data requesting IPU."""
@@ -153,7 +153,9 @@ class IstioIngressCharm(CharmBase):
 
     def _is_deployment_ready(self) -> bool:
         """Check if the deployment is ready after 10 attempts."""
-        attempts = 10
+        timeout = int(self.config["ready-timeout"])
+        check_interval = 10
+        attempts = timeout // check_interval
 
         for _ in range(attempts):
             try:
@@ -168,20 +170,22 @@ class IstioIngressCharm(CharmBase):
             except ApiError as e:
                 logger.error(f"Error checking gateway deployment status: {e}")
 
-            time.sleep(10)
+            time.sleep(check_interval)
 
         return False
 
     def _is_load_balancer_ready(self) -> bool:
         """Wait for the LoadBalancer to be created."""
-        attempts = 10
+        timeout = int(self.config["ready-timeout"])
+        check_interval = 10
+        attempts = timeout // check_interval
 
         for _ in range(attempts):
             lb_status = self._get_lb_status
             if lb_status:
                 return True
 
-            time.sleep(10)
+            time.sleep(check_interval)
         return False
 
     @property

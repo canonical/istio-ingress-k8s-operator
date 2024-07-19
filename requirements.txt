@@ -1,7 +1,11 @@
 ops ~= 2.5
 pydantic>=2
 
-lightkube-extensions @ git+https://github.com/canonical/lightkube-extensions.git@add-initial-helpers
+
+# A collection of helpers and shared code for using Lightkube
+# Code: https://github.com/canonical/lightkube-extensions
+# Deps: charm
+lightkube-extensions @ git+https://github.com/canonical/lightkube-extensions.git@main
 
 # An implementation of the JSON Schema specification
 # Code: https://github.com/python-jsonschema/jsonschema
