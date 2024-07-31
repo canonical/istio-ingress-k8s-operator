@@ -3,7 +3,9 @@
 
 import asyncio
 import logging
+from dataclasses import asdict, dataclass
 from pathlib import Path
+from typing import Optional
 from urllib.parse import urlparse
 
 import pytest
@@ -25,13 +27,35 @@ METADATA = yaml.safe_load(Path("./charmcraft.yaml").read_text())
 APP_NAME = METADATA["name"]
 
 
+@dataclass
+class CharmDeploymentConfdiguration:
+    entity_url: str  # aka charm name or local path to charm
+    application_name: str
+    channel: str
+    trust: bool
+    config: Optional[dict] = None
+
+
+ISTIO_K8S = CharmDeploymentConfdiguration(
+    entity_url="istio-k8s", application_name="istio-k8s", channel="latest/edge", trust=True
+)
+
+
 @pytest.mark.abort_on_fail
-async def test_deployment(ops_test: OpsTest, istio_ingress_charm, ipa_tester_charm):
+async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
     await asyncio.gather(
-        ops_test.model.deploy(istio_ingress_charm, application_name=APP_NAME),
-        ops_test.model.deploy(ipa_tester_charm, "ipa-tester"),
+        ops_test.model.deploy(ipa_tester_charm, application_name="ipa-tester"),
+        ops_test.model.deploy(**asdict(ISTIO_K8S)),
     )
-    await ops_test.model.wait_for_idle([APP_NAME, "ipa-tester"], status="active", timeout=1000)
+    await ops_test.model.wait_for_idle(
+        [ISTIO_K8S.application_name, "ipa-tester"], status="active", timeout=1000
+    )
+
+
+@pytest.mark.abort_on_fail
+async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
+    await ops_test.model.deploy(istio_ingress_charm, application_name=APP_NAME, trust=True),
+    await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=1000)
 
 
 @pytest.mark.abort_on_fail
