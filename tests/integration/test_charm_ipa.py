@@ -28,7 +28,7 @@ APP_NAME = METADATA["name"]
 
 
 @dataclass
-class CharmDeploymentConfdiguration:
+class CharmDeploymentConfiguration:
     entity_url: str  # aka charm name or local path to charm
     application_name: str
     channel: str
@@ -36,7 +36,7 @@ class CharmDeploymentConfdiguration:
     config: Optional[dict] = None
 
 
-ISTIO_K8S = CharmDeploymentConfdiguration(
+ISTIO_K8S = CharmDeploymentConfiguration(
     entity_url="istio-k8s", application_name="istio-k8s", channel="latest/edge", trust=True
 )
 
