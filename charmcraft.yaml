@@ -29,7 +29,11 @@ bases:
 parts:
   charm:
     plugin: charm
-    build-packages: [git]
+    build-packages: [git, rustc, cargo]
+    charm-binary-python-packages:
+      # TODO after https://github.com/canonical/istio-ingress-k8s-operator/issues/7 closed: 
+      #      remove rpds-py from this list
+      - "rpds-py"
 
 config:
   options:
