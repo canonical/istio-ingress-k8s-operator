@@ -5,9 +5,11 @@
 
 """Istio Ingress Charm."""
 
+import ipaddress
 import logging
+import re
 import time
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
 from charms.traefik_k8s.v2.ingress import IngressPerAppProvider as IPAv2
 from charms.traefik_k8s.v2.ingress import IngressRequirerData
@@ -237,6 +239,11 @@ class IstioIngressCharm(CharmBase):
                         port=80,
                         protocol="HTTP",
                         allowedRoutes=AllowedRoutes(namespaces={"from": "All"}),
+                        **(
+                            {"hostname": self._external_host}
+                            if self._is_valid_hostname(self._external_host)
+                            else {}
+                        ),
                     )
                 ],
             ),
@@ -361,6 +368,8 @@ class IstioIngressCharm(CharmBase):
         If the gateway isn't available or doesn't have a load balancer address yet,
         returns None. Only use this directly when external_host is allowed to be None.
         """
+        if external_hostname := self.model.config.get("external_hostname"):
+            return cast(str, external_hostname)
         return self._get_lb_status
 
     @staticmethod
@@ -368,6 +377,54 @@ class IstioIngressCharm(CharmBase):
         """Generate prefix for the ingress configuration."""
         name = data["name"].replace("/", "-")
         return f"/{data['model']}-{name}"
+
+    def _is_valid_hostname(self, hostname: Optional[str]) -> bool:
+        # https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1.Hostname
+        """Check if the provided hostname is a valid DNS hostname according to RFC 1123.
+
+        Supports wildcard prefixes. This function ensures that the hostname conforms
+        to the DNS naming conventions, allowing wildcards and excluding IP addresses.
+
+        Args:
+            hostname (str): The hostname to validate.
+
+        Returns:
+            bool: True if the hostname is valid, False otherwise.
+        """
+        if not hostname:
+            return False
+
+        # Check if the hostname is an IP address
+        if self._is_ip_address(hostname):
+            return False
+
+        # Check for wildcard prefix
+        if hostname.startswith("*."):
+            hostname = hostname[2:]
+
+        # Validate the hostname length
+        if len(hostname) > 253:
+            return False
+
+        # Split hostname into labels and validate each
+        labels = hostname.split(".")
+        for label in labels:
+            if not (1 <= len(label) <= 63):
+                return False
+            if not re.match(r"^[a-zA-Z0-9-]+$", label):
+                return False
+            if label.startswith("-") or label.endswith("-"):
+                return False
+
+        return True
+
+    def _is_ip_address(self, address: str) -> bool:
+        """Check if the provided address is a valid IP address."""
+        try:
+            ipaddress.ip_address(address)
+            return True
+        except ValueError:
+            return False
 
 
 if __name__ == "__main__":

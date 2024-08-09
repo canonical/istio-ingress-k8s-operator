@@ -45,6 +45,15 @@ config:
         ready. This applies specifically to the deployment/LB created for the Istio 
         gateway controller. If the deployment does not become ready within this time, 
         charm will go into blocked state.
+    external_hostname:
+      description: |
+        The DNS name to be used by Istio ingress.
+        If unspecified, the gateway ingress ip address will be used, e.g,
+        as provided by MetalLB. This needs to be a `bare` hostname: i.e. 
+        no schema prefix and no port.
+        Hostname can be “precise” which is a domain name without the terminating dot of a network host (e.g. “foo.example.com”) or “wildcard”,
+        which is a domain name prefixed with a single wildcard label (e.g. *.example.com).
+      type: string
 
 provides:
   ingress:

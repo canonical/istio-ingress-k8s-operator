@@ -6,7 +6,7 @@
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict
 
 
 # Global metadata schema
@@ -28,6 +28,8 @@ class AllowedRoutes(BaseModel):
 
 class Listener(BaseModel):
     """Listener defines a port and protocol configuration."""
+
+    model_config = ConfigDict(extra="allow")
 
     name: str
     port: int
