@@ -5,7 +5,6 @@
 
 """Istio Ingress Charm."""
 
-import ipaddress
 import logging
 import re
 import time
@@ -73,13 +72,14 @@ INGRESS_RESOURCE_TYPES = {
 GATEWAY_LABEL = "istio-gateway"
 INGRESS_LABEL = "istio-ingress"
 
+# Regex to match gateway hostname specs https://github.com/kubernetes-sigs/gateway-api/blob/6446fac9325dbb570675f7b85d58727096bf60a6/apis/v1/shared_types.go#L523
+HOSTNAME_REGEX = re.compile(
+    r"^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$"
+)
+
 
 class DataValidationError(RuntimeError):
     """Raised when data validation fails on IPU relation data."""
-
-
-class ExternalHostNotReadyError(Exception):
-    """Raised when the ingress hostname is not ready but is assumed to be."""
 
 
 class IstioIngressCharm(CharmBase):
@@ -250,8 +250,8 @@ class IstioIngressCharm(CharmBase):
         )
         gateway_resource = RESOURCE_TYPES["Gateway"]
         return gateway_resource(
-            metadata=ObjectMeta.from_dict(gateway.metadata.dict()),
-            spec=gateway.spec.dict(),
+            metadata=ObjectMeta.from_dict(gateway.metadata.model_dump()),
+            spec=gateway.spec.model_dump(),
         )
 
     def _construct_httproute(self, data: IngressRequirerData, prefix: str):
@@ -284,8 +284,8 @@ class IstioIngressCharm(CharmBase):
         )
         http_resource = RESOURCE_TYPES["HTTPRoute"]
         return http_resource(
-            metadata=ObjectMeta.from_dict(http_route.metadata.dict()),
-            spec=http_route.spec.dict(),
+            metadata=ObjectMeta.from_dict(http_route.metadata.model_dump()),
+            spec=http_route.spec.model_dump(),
         )
 
     def _sync_all_resources(self):
@@ -322,7 +322,7 @@ class IstioIngressCharm(CharmBase):
                 continue
 
             data = self.ingress_per_appv2.get_data(rel)
-            prefix = self._generate_prefix(data.app.dict(by_alias=True))
+            prefix = self._generate_prefix(data.app.model_dump(by_alias=True))
             resource_to_append = self._construct_httproute(data, prefix)
 
             if rel.active:
@@ -342,21 +342,7 @@ class IstioIngressCharm(CharmBase):
 
     def _generate_external_url(self, prefix: str) -> str:
         """Generate external URL for the ingress."""
-        return f"http://{self.external_host}{prefix}"
-
-    @property
-    def external_host(self) -> str:
-        """The external address for the ingress gateway.
-
-        If the gateway isn't available or doesn't have a load balancer address yet, it will
-        raise an exception.
-
-        To prevent that from happening, ensure this is only accessed behind an is_ready guard.
-        """
-        host = self._external_host
-        if host is None or not isinstance(host, str):
-            raise ExternalHostNotReadyError()
-        return host
+        return f"http://{self._external_host}{prefix}"
 
     @property
     def _external_host(self) -> Optional[str]:
@@ -369,7 +355,11 @@ class IstioIngressCharm(CharmBase):
         returns None. Only use this directly when external_host is allowed to be None.
         """
         if external_hostname := self.model.config.get("external_hostname"):
-            return cast(str, external_hostname)
+            hostname = cast(str, external_hostname)
+            if self._is_valid_hostname(hostname):
+                return hostname
+            logger.error("Invalid hostname provided, defaulting to loadbalancer external IP")
+
         return self._get_lb_status
 
     @staticmethod
@@ -391,40 +381,15 @@ class IstioIngressCharm(CharmBase):
         Returns:
             bool: True if the hostname is valid, False otherwise.
         """
-        if not hostname:
-            return False
-
-        # Check if the hostname is an IP address
-        if self._is_ip_address(hostname):
-            return False
-
-        # Check for wildcard prefix
-        if hostname.startswith("*."):
-            hostname = hostname[2:]
-
         # Validate the hostname length
-        if len(hostname) > 253:
+        if not hostname or not (1 <= len(hostname) <= 253):
             return False
 
-        # Split hostname into labels and validate each
-        labels = hostname.split(".")
-        for label in labels:
-            if not (1 <= len(label) <= 63):
-                return False
-            if not re.match(r"^[a-zA-Z0-9-]+$", label):
-                return False
-            if label.startswith("-") or label.endswith("-"):
-                return False
+        # Check if the hostname matches the required pattern
+        if not HOSTNAME_REGEX.match(hostname):
+            return False
 
         return True
-
-    def _is_ip_address(self, address: str) -> bool:
-        """Check if the provided address is a valid IP address."""
-        try:
-            ipaddress.ip_address(address)
-            return True
-        except ValueError:
-            return False
 
 
 if __name__ == "__main__":
