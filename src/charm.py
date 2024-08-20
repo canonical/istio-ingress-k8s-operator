@@ -280,6 +280,7 @@ class IstioIngressCharm(CharmBase):
                         filters=([URLRewriteFilter()] if data.app.strip_prefix else []),
                     )
                 ],
+                hostnames=[udata.host for udata in data.units],
             ),
         )
         http_resource = RESOURCE_TYPES["HTTPRoute"]

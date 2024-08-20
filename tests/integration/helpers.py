@@ -1,6 +1,6 @@
 import asyncio
 import logging
-from typing import Optional
+from typing import List, Optional
 
 import sh
 from pytest_operator.plugin import OpsTest
@@ -27,6 +27,31 @@ async def get_k8s_service_address(ops_test: OpsTest, service_name: str) -> Optio
         return ip_address
     except Exception as e:
         logger.error("Error retrieving service address %s", e, exc_info=1)
+        return None
+
+
+async def get_hosts_from_route(ops_test: OpsTest, route_name: str) -> Optional[List[str]]:
+    """Retrieve the hostname from the HTTPRoute resource.
+
+    Args:
+        ops_test: pytest-operator plugin
+        route_name: Name of the HTTPRoute resource.
+
+    Returns:
+        A list of hostnames found in the HTTPRoute resource, or None if not found.
+    """
+    model = ops_test.model.info
+    try:
+        result = sh.kubectl(
+            *f"-n {model.name} get httproute/{route_name} -o=jsonpath='{{.spec.hostnames[*]}}'".split()
+        )
+        if result:
+            hostnames = result.strip().split()
+            return hostnames
+        return None
+
+    except Exception as e:
+        logger.error("Error retrieving HTTPRoute hostnames: %s", e, exc_info=1)
         return None
 
 

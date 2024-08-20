@@ -1,7 +1,6 @@
 # Copyright 2024 Canonical Ltd.
 # See LICENSE file for licensing details.
 
-import asyncio
 import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -16,6 +15,7 @@ from conftest import (
 )
 from helpers import (
     dequote,
+    get_hosts_from_route,
     get_k8s_service_address,
     remove_application,
 )
@@ -43,12 +43,29 @@ ISTIO_K8S = CharmDeploymentConfiguration(
 
 @pytest.mark.abort_on_fail
 async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
-    await asyncio.gather(
-        ops_test.model.deploy(ipa_tester_charm, application_name="ipa-tester"),
-        ops_test.model.deploy(**asdict(ISTIO_K8S)),
+
+    # Not the model name just an alias
+    await ops_test.track_model("istio-core")
+    istio_core = ops_test.models.get("istio-core")
+
+    # Deploy Istio-k8s
+    await istio_core.model.deploy(**asdict(ISTIO_K8S))
+    await istio_core.model.wait_for_idle(
+        [
+            ISTIO_K8S.application_name,
+        ],
+        status="active",
+        timeout=1000,
     )
+
+    # Deploy ipa-tester
+    await ops_test.model.deploy(ipa_tester_charm, application_name="ipa-tester"),
     await ops_test.model.wait_for_idle(
-        [ISTIO_K8S.application_name, "ipa-tester"], status="active", timeout=1000
+        [
+            "ipa-tester",
+        ],
+        status="active",
+        timeout=1000,
     )
 
 
@@ -77,6 +94,13 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
 
     requirer_app_data = data.requirer.application_data
     model = dequote(requirer_app_data["model"])
+
+    # Rel data assertions
+    assert dequote(requirer_app_data["name"]) == "ipa-tester"
+    assert dequote(requirer_app_data["port"]) == "80"
+    assert not requirer_app_data.get("host")
+    assert dequote(data.requirer.unit_data["host"]) == "foo.bar"
+
     istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
 
     assert url == f"http://{istio_ingress_address}/{model}-ipa-tester"
@@ -85,6 +109,12 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
     ip = url_parts.hostname
     port = url_parts.port or 80
     assert_can_connect(ip, port)
+
+    # TODO: get the hostname set in the HTTPRoute k8s resource and assert that it matches
+    hosts = get_hosts_from_route()
+    # Assert that the first hostname in the list is "foo.bar".
+    assert hosts is not None, "No hosts were retrieved from the HTTPRoute resource."
+    assert hosts[0] == "foo.bar", f"Expected 'foo.bar' as the first host, but got '{hosts[0]}'"
 
 
 @pytest.mark.abort_on_fail

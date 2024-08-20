@@ -113,6 +113,7 @@ class HTTPRouteResourceSpec(BaseModel):
 
     parentRefs: List[ParentRef]  # noqa: N815
     rules: List[Rule]
+    hostnames: Optional[List[str]] = []
 
 
 class HTTPRouteResource(BaseModel):
