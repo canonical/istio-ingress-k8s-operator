@@ -80,6 +80,7 @@ async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
 
 @pytest.mark.abort_on_fail
 async def test_relate(ops_test: OpsTest):
+    await ops_test.model.applications[APP_NAME].set_config({"external_hostname": "*.foo.bar"})
     await ops_test.model.add_relation("ipa-tester:ingress", "istio-ingress-k8s:ingress")
     await ops_test.model.wait_for_idle([APP_NAME, "ipa-tester"])
 
@@ -102,7 +103,7 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
     assert dequote(requirer_app_data["name"]) == "ipa-tester"
     assert dequote(requirer_app_data["port"]) == "80"
     assert not requirer_app_data.get("host")
-    assert dequote(data.requirer.unit_data["host"]) == "foo.bar"
+    assert dequote(data.requirer.unit_data["host"]) == "bar.foo.bar"
 
     istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
 
