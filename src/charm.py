@@ -74,9 +74,15 @@ GATEWAY_LABEL = "istio-gateway"
 INGRESS_LABEL = "istio-ingress"
 
 # Regex to match gateway hostname specs https://github.com/kubernetes-sigs/gateway-api/blob/6446fac9325dbb570675f7b85d58727096bf60a6/apis/v1/shared_types.go#L523
-HOSTNAME_REGEX = re.compile(
-    r"^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$"
-)
+# Below is the original regex used to validate hosts, as part of this dev iteration below will be omitted in favor of a regex with no wildcard support.
+# TODO: uncomment the below when support is added for both wildcards and using subdomains
+# HOSTNAME_REGEX = re.compile(
+#     r"^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$"
+# )
+
+
+# Regex with no wildcard (*) or IP support.
+HOSTNAME_REGEX = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$")
 
 
 class DataValidationError(RuntimeError):
@@ -281,7 +287,8 @@ class IstioIngressCharm(CharmBase):
                         filters=([URLRewriteFilter()] if data.app.strip_prefix else []),
                     )
                 ],
-                hostnames=[udata.host for udata in data.units],
+                # TODO: uncomment the below when support is added for both wildcards and using subdomains
+                # hostnames=[udata.host for udata in data.units],
             ),
         )
         http_resource = RESOURCE_TYPES["HTTPRoute"]

@@ -19,7 +19,6 @@ from helpers import (
     get_listener_condition,
     get_listener_spec,
     get_route_condition,
-    get_route_spec,
     remove_application,
 )
 from pytest_operator.plugin import OpsTest
@@ -80,7 +79,6 @@ async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
 
 @pytest.mark.abort_on_fail
 async def test_relate(ops_test: OpsTest):
-    await ops_test.model.applications[APP_NAME].set_config({"external_hostname": "*.foo.bar"})
     await ops_test.model.add_relation("ipa-tester:ingress", "istio-ingress-k8s:ingress")
     await ops_test.model.wait_for_idle([APP_NAME, "ipa-tester"])
 
@@ -102,8 +100,6 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
     # Rel data assertions
     assert dequote(requirer_app_data["name"]) == "ipa-tester"
     assert dequote(requirer_app_data["port"]) == "80"
-    assert not requirer_app_data.get("host")
-    assert dequote(data.requirer.unit_data["host"]) == "bar.foo.bar"
 
     istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
 
@@ -117,6 +113,9 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
 
 @pytest.mark.abort_on_fail
 async def test_route_validity(ops_test: OpsTest):
+    await ops_test.model.applications[APP_NAME].set_config({"external_hostname": "foo.bar"})
+    await ops_test.model.wait_for_idle([APP_NAME, "ipa-tester"])
+
     data = get_relation_data(
         requirer_endpoint="ipa-tester/0:ingress",
         provider_endpoint="istio-ingress-k8s/0:ingress",
@@ -128,7 +127,6 @@ async def test_route_validity(ops_test: OpsTest):
     listener_condition = await get_listener_condition(ops_test, "istio-ingress-k8s")
     route_condition = await get_route_condition(ops_test, requirer_app_data["name"])
     listener_spec = await get_listener_spec(ops_test, "istio-ingress-k8s")
-    route_spec = await get_route_spec(ops_test, requirer_app_data["name"])
 
     assert listener_condition["attachedRoutes"] == 1
     assert listener_condition["conditions"][0]["message"] == "No errors found"
@@ -138,8 +136,7 @@ async def test_route_validity(ops_test: OpsTest):
     assert route_condition["conditions"][0]["reason"] == "Accepted"
     assert route_condition["controllerName"] == "istio.io/gateway-controller"
 
-    assert listener_spec["hostname"] == "*.foo.bar"
-    assert route_spec["hostnames"][0] == "bar.foo.bar"
+    assert listener_spec["hostname"] == "foo.bar"
 
 
 @pytest.mark.abort_on_fail

@@ -113,7 +113,9 @@ class HTTPRouteResourceSpec(BaseModel):
 
     parentRefs: List[ParentRef]  # noqa: N815
     rules: List[Rule]
-    hostnames: Optional[List[str]] = []
+
+    # TODO: uncomment the below when support is added for both wildcards and using subdomains
+    # hostnames: Optional[List[str]] = []
 
 
 class HTTPRouteResource(BaseModel):
