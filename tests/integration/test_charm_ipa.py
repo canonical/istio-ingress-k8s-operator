@@ -15,8 +15,11 @@ from conftest import (
 )
 from helpers import (
     dequote,
-    get_hosts_from_route,
     get_k8s_service_address,
+    get_listener_condition,
+    get_listener_spec,
+    get_route_condition,
+    get_route_spec,
     remove_application,
 )
 from pytest_operator.plugin import OpsTest
@@ -110,11 +113,32 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
     port = url_parts.port or 80
     assert_can_connect(ip, port)
 
-    # TODO: get the hostname set in the HTTPRoute k8s resource and assert that it matches
-    hosts = get_hosts_from_route()
-    # Assert that the first hostname in the list is "foo.bar".
-    assert hosts is not None, "No hosts were retrieved from the HTTPRoute resource."
-    assert hosts[0] == "foo.bar", f"Expected 'foo.bar' as the first host, but got '{hosts[0]}'"
+
+@pytest.mark.abort_on_fail
+async def test_route_validity(ops_test: OpsTest):
+    data = get_relation_data(
+        requirer_endpoint="ipa-tester/0:ingress",
+        provider_endpoint="istio-ingress-k8s/0:ingress",
+        model=ops_test.model_full_name,
+    )
+
+    requirer_app_data = data.requirer.application_data
+
+    listener_condition = await get_listener_condition(ops_test, "istio-ingress-k8s")
+    route_condition = await get_route_condition(ops_test, requirer_app_data["name"])
+    listener_spec = await get_listener_spec(ops_test, "istio-ingress-k8s")
+    route_spec = await get_route_spec(ops_test, requirer_app_data["name"])
+
+    assert listener_condition["attachedRoutes"] == 1
+    assert listener_condition["conditions"][0]["message"] == "No errors found"
+    assert listener_condition["conditions"][0]["reason"] == "Accepted"
+
+    assert route_condition["conditions"][0]["message"] == "Route was valid"
+    assert route_condition["conditions"][0]["reason"] == "Accepted"
+    assert route_condition["controllerName"] == "istio.io/gateway-controller"
+
+    assert listener_spec["hostname"] == "*.foo.bar"
+    assert route_spec["hostnames"][0] == "bar.foo.bar"
 
 
 @pytest.mark.abort_on_fail

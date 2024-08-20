@@ -1,6 +1,7 @@
 import asyncio
+import json
 import logging
-from typing import List, Optional
+from typing import Any, Dict, Optional
 
 import sh
 from pytest_operator.plugin import OpsTest
@@ -30,28 +31,103 @@ async def get_k8s_service_address(ops_test: OpsTest, service_name: str) -> Optio
         return None
 
 
-async def get_hosts_from_route(ops_test: OpsTest, route_name: str) -> Optional[List[str]]:
-    """Retrieve the hostname from the HTTPRoute resource.
+async def get_listener_condition(ops_test: OpsTest, gateway_name: str) -> Optional[Dict[str, Any]]:
+    """Retrieve the status of the listener from the Gateway resource as a dictionary.
+
+    Args:
+        ops_test: pytest-operator plugin
+        gateway_name: Name of the Gateway resource.
+
+    Returns:
+        A dictionary representing the status of the first listener, or None if not found.
+    """
+    model = ops_test.model.info
+    try:
+        result = sh.kubectl(
+            *f"-n {model.name} get gateway/{gateway_name} -o=jsonpath='{{.status.listeners[0]}}'".split()
+        )
+        if result:
+            listener_status = json.loads(result[1:-1])
+            return listener_status
+        return None
+
+    except Exception as e:
+        logger.error("Error retrieving Gateway listener condition: %s", e, exc_info=1)
+        return None
+
+
+async def get_listener_spec(ops_test: OpsTest, gateway_name: str) -> Optional[Dict[str, Any]]:
+    """Retrieve the spec of the listener from the Gateway resource as a dictionary.
+
+    Args:
+        ops_test: pytest-operator plugin
+        gateway_name: Name of the Gateway resource.
+
+    Returns:
+        A dictionary representing the spec of the first listener, or None if not found.
+    """
+    model = ops_test.model.info
+    try:
+        result = sh.kubectl(
+            *f"-n {model.name} get gateway/{gateway_name} -o=jsonpath='{{.spec.listeners[0]}}'".split()
+        )
+        if result:
+            listener_spec = json.loads(result[1:-1])
+            return listener_spec
+        return None
+
+    except Exception as e:
+        logger.error("Error retrieving Gateway listener condition: %s", e, exc_info=1)
+        return None
+
+
+def get_route_spec(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any]]:
+    """Retrieve and check the spec of the HTTPRoute resource.
 
     Args:
         ops_test: pytest-operator plugin
         route_name: Name of the HTTPRoute resource.
 
     Returns:
-        A list of hostnames found in the HTTPRoute resource, or None if not found.
+        A dictionary representing the spec of the route, or None if not found.
     """
     model = ops_test.model.info
     try:
         result = sh.kubectl(
-            *f"-n {model.name} get httproute/{route_name} -o=jsonpath='{{.spec.hostnames[*]}}'".split()
+            *f"-n {model.name} get httproute/{route_name} -o=jsonpath='{{.spec}}'".split()
         )
         if result:
-            hostnames = result.strip().split()
-            return hostnames
+            route_spec = json.loads(result[1:-1])
+            return route_spec
         return None
 
     except Exception as e:
-        logger.error("Error retrieving HTTPRoute hostnames: %s", e, exc_info=1)
+        logger.error("Error retrieving HTTPRoute condition: %s", e, exc_info=1)
+        return None
+
+
+def get_route_condition(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any]]:
+    """Retrieve and check the condition from the HTTPRoute resource.
+
+    Args:
+        ops_test: pytest-operator plugin
+        route_name: Name of the HTTPRoute resource.
+
+    Returns:
+        A dictionary representing the status of the parent gateway the route is attached to, or None if not found.
+    """
+    model = ops_test.model.info
+    try:
+        result = sh.kubectl(
+            *f"-n {model.name} get httproute/{route_name} -o=jsonpath='{{.status.parents[0]}}'".split()
+        )
+        if result:
+            route_status = json.loads(result[1:-1])
+            return route_status
+        return None
+
+    except Exception as e:
+        logger.error("Error retrieving HTTPRoute condition: %s", e, exc_info=1)
         return None
 
 

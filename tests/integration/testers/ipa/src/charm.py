@@ -9,7 +9,7 @@ from ops.model import ActiveStatus
 class IPARequirerMock(CharmBase):
     def __init__(self, framework):
         super().__init__(framework)
-        self.ipa = IngressPerAppRequirer(self, port=80, host="foo.bar")
+        self.ipa = IngressPerAppRequirer(self, port=80, host="bar.foo.bar")
         self.unit.status = ActiveStatus("ready")
 
 
