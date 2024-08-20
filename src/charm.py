@@ -19,6 +19,16 @@ from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.apps_v1 import Deployment
 from lightkube.resources.core_v1 import Service
 from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
+from ops import BlockedStatus
+from ops.charm import (
+    CharmBase,
+)
+from ops.main import main
+from ops.model import (
+    ActiveStatus,
+    MaintenanceStatus,
+)
+
 from models import (
     AllowedRoutes,
     BackendRef,
@@ -33,15 +43,6 @@ from models import (
     PathMatch,
     Rule,
     URLRewriteFilter,
-)
-from ops import BlockedStatus
-from ops.charm import (
-    CharmBase,
-)
-from ops.main import main
-from ops.model import (
-    ActiveStatus,
-    MaintenanceStatus,
 )
 
 logger = logging.getLogger(__name__)
