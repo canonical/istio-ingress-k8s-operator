@@ -81,7 +81,7 @@ async def get_listener_spec(ops_test: OpsTest, gateway_name: str) -> Optional[Di
         return None
 
 
-def get_route_spec(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any]]:
+async def get_route_spec(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve and check the spec of the HTTPRoute resource.
 
     Args:
@@ -106,7 +106,7 @@ def get_route_spec(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any
         return None
 
 
-def get_route_condition(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any]]:
+async def get_route_condition(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve and check the condition from the HTTPRoute resource.
 
     Args:

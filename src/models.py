@@ -6,7 +6,7 @@
 
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel
 
 
 # Global metadata schema
@@ -29,12 +29,11 @@ class AllowedRoutes(BaseModel):
 class Listener(BaseModel):
     """Listener defines a port and protocol configuration."""
 
-    model_config = ConfigDict(extra="allow")
-
     name: str
     port: int
     protocol: str
     allowedRoutes: AllowedRoutes  # noqa: N815
+    hostname: Optional[str] = None
 
 
 class IstioGatewaySpec(BaseModel):

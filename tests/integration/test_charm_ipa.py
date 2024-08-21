@@ -116,16 +116,8 @@ async def test_route_validity(ops_test: OpsTest):
     await ops_test.model.applications[APP_NAME].set_config({"external_hostname": "foo.bar"})
     await ops_test.model.wait_for_idle([APP_NAME, "ipa-tester"])
 
-    data = get_relation_data(
-        requirer_endpoint="ipa-tester/0:ingress",
-        provider_endpoint="istio-ingress-k8s/0:ingress",
-        model=ops_test.model_full_name,
-    )
-
-    requirer_app_data = data.requirer.application_data
-
     listener_condition = await get_listener_condition(ops_test, "istio-ingress-k8s")
-    route_condition = await get_route_condition(ops_test, requirer_app_data["name"])
+    route_condition = await get_route_condition(ops_test, "ipa-tester")
     listener_spec = await get_listener_spec(ops_test, "istio-ingress-k8s")
 
     assert listener_condition["attachedRoutes"] == 1
