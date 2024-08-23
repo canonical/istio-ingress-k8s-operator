@@ -1,4 +1,3 @@
-import asyncio
 import json
 import logging
 from typing import Any, Dict, Optional
@@ -135,24 +134,3 @@ def dequote(s: str):
     if isinstance(s, str) and s.startswith('"') and s.endswith('"'):
         s = s[1:-1]
     return s
-
-
-async def remove_application(
-    ops_test: OpsTest, name: str, *, timeout: int = 60, force: bool = True
-):
-    # In CI, tests consistently timeout on `waiting: gateway address unavailable`.
-    # Just in case there's an unreleased socket, let's try to remove istio-ingress more gently.
-
-    app = ops_test.model.applications.get(name)
-    if not app:
-        return
-
-    # Wrapping in `create_task` to be able to timeout with `wait`
-    tasks = [asyncio.create_task(app.destroy(destroy_storage=True, force=False, no_wait=False))]
-    await asyncio.wait(tasks, timeout=timeout)
-
-    if not force:
-        return
-
-    # Now, after the workload has hopefully terminated, force removal of the juju leftovers
-    await app.destroy(destroy_storage=True, force=True, no_wait=True)

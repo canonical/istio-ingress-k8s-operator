@@ -20,14 +20,9 @@ from lightkube.resources.apps_v1 import Deployment
 from lightkube.resources.core_v1 import Service
 from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
 from ops import BlockedStatus
-from ops.charm import (
-    CharmBase,
-)
+from ops.charm import CharmBase
 from ops.main import main
-from ops.model import (
-    ActiveStatus,
-    MaintenanceStatus,
-)
+from ops.model import ActiveStatus, MaintenanceStatus
 
 from models import (
     AllowedRoutes,
@@ -72,17 +67,6 @@ INGRESS_RESOURCE_TYPES = {
 }
 GATEWAY_LABEL = "istio-gateway"
 INGRESS_LABEL = "istio-ingress"
-
-# Regex to match gateway hostname specs https://github.com/kubernetes-sigs/gateway-api/blob/6446fac9325dbb570675f7b85d58727096bf60a6/apis/v1/shared_types.go#L523
-# Below is the original regex used to validate hosts, as part of this dev iteration below will be omitted in favor of a regex with no wildcard support.
-# TODO: uncomment the below when support is added for both wildcards and using subdomains
-# HOSTNAME_REGEX = re.compile(
-#     r"^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$"
-# )
-
-
-# Regex with no wildcard (*) or IP support.
-HOSTNAME_REGEX = re.compile(r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$")
 
 
 class DataValidationError(RuntimeError):
@@ -190,7 +174,7 @@ class IstioIngressCharm(CharmBase):
         attempts = timeout // check_interval
 
         for _ in range(attempts):
-            lb_status = self._get_lb_status
+            lb_status = self._get_lb_external_address
             if lb_status:
                 return True
 
@@ -198,7 +182,7 @@ class IstioIngressCharm(CharmBase):
         return False
 
     @property
-    def _get_lb_status(self) -> Optional[str]:
+    def _get_lb_external_address(self) -> Optional[str]:
         try:
             lb = self.lightkube_client.get(
                 Service, name=self.managed_name, namespace=self.model.name
@@ -369,7 +353,7 @@ class IstioIngressCharm(CharmBase):
                 return hostname
             logger.error("Invalid hostname provided, defaulting to loadbalancer external IP")
 
-        return self._get_lb_status
+        return self._get_lb_external_address
 
     @staticmethod
     def _generate_prefix(data: Dict[str, Any]) -> str:
@@ -381,8 +365,8 @@ class IstioIngressCharm(CharmBase):
         # https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1.Hostname
         """Check if the provided hostname is a valid DNS hostname according to RFC 1123.
 
-        Supports wildcard prefixes. This function ensures that the hostname conforms
-        to the DNS naming conventions, allowing wildcards and excluding IP addresses.
+        Doesn't support wildcard prefixes. This function ensures that the hostname conforms
+        to the DNS naming conventions, excluding wildcards and IP addresses.
 
         Args:
             hostname (str): The hostname to validate.
@@ -390,12 +374,24 @@ class IstioIngressCharm(CharmBase):
         Returns:
             bool: True if the hostname is valid, False otherwise.
         """
+        # Regex to match gateway hostname specs https://github.com/kubernetes-sigs/gateway-api/blob/6446fac9325dbb570675f7b85d58727096bf60a6/apis/v1/shared_types.go#L523
+        # Below is the original regex used to validate hosts, as part of this dev iteration below will be omitted in favor of a regex with no wildcard support.
+        # TODO: uncomment the below when support is added for both wildcards and using subdomains
+        # hostname_regex = re.compile(
+        #     r"^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$"
+        # )
+
+        # Regex with no wildcard (*) or IP support.
+        hostname_regex = re.compile(
+            r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$"
+        )
+
         # Validate the hostname length
         if not hostname or not (1 <= len(hostname) <= 253):
             return False
 
         # Check if the hostname matches the required pattern
-        if not HOSTNAME_REGEX.match(hostname):
+        if not hostname_regex.match(hostname):
             return False
 
         return True

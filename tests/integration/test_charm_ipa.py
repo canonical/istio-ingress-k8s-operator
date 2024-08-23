@@ -19,7 +19,6 @@ from helpers import (
     get_listener_condition,
     get_listener_spec,
     get_route_condition,
-    remove_application,
 )
 from pytest_operator.plugin import OpsTest
 
@@ -45,8 +44,14 @@ ISTIO_K8S = CharmDeploymentConfiguration(
 
 @pytest.mark.abort_on_fail
 async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
+    """Deploys dependencies across two models: one for Istio and one for ipa-tester.
 
-    # Not the model name just an alias
+    This test uses a multi-model approach to isolate Istio and the ipa-tester in
+    separate Kubernetes namespaces. It deploys Istio in the 'istio-core' model
+    and ipa-tester in the main test model.
+    """
+    # Instantiate a second model for istio-core.  ops_test automatically gives it a unique name,
+    # but we provide a user-friendly alias of "istio-core"
     await ops_test.track_model("istio-core")
     istio_core = ops_test.models.get("istio-core")
 
@@ -135,7 +140,3 @@ async def test_route_validity(ops_test: OpsTest):
 async def test_remove_relation(ops_test: OpsTest):
     await ops_test.juju("remove-relation", "ipa-tester:ingress", "istio-ingress-k8s:ingress")
     await ops_test.model.wait_for_idle([APP_NAME, "ipa-tester"], status="active")
-
-
-async def test_cleanup(ops_test):
-    await remove_application(ops_test, APP_NAME, timeout=60)
