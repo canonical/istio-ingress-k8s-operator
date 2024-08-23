@@ -1,11 +1,22 @@
-import json
 import logging
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, cast
 
-import sh
+import lightkube
+from lightkube.generic_resource import create_namespaced_resource
+from lightkube.resources.core_v1 import Service
 from pytest_operator.plugin import OpsTest
 
 logger = logging.getLogger(__name__)
+
+
+RESOURCE_TYPES = {
+    "Gateway": create_namespaced_resource(
+        "gateway.networking.k8s.io", "v1", "Gateway", "gateways"
+    ),
+    "HTTPRoute": create_namespaced_resource(
+        "gateway.networking.k8s.io", "v1", "HTTPRoute", "httproutes"
+    ),
+}
 
 
 async def get_k8s_service_address(ops_test: OpsTest, service_name: str) -> Optional[str]:
@@ -20,11 +31,10 @@ async def get_k8s_service_address(ops_test: OpsTest, service_name: str) -> Optio
     """
     model = ops_test.model.info
     try:
-        result = sh.kubectl(
-            *f"-n {model.name} get service/{service_name} -o=jsonpath='{{.status.loadBalancer.ingress[0].ip}}'".split()
-        )
-        ip_address = result.strip("'")
-        return ip_address
+        c = lightkube.Client()
+        svc = c.get(Service, namespace=model.name, name=service_name)
+        return svc.status.loadBalancer.ingress[0].ip
+
     except Exception as e:
         logger.error("Error retrieving service address %s", e, exc_info=1)
         return None
@@ -42,13 +52,9 @@ async def get_listener_condition(ops_test: OpsTest, gateway_name: str) -> Option
     """
     model = ops_test.model.info
     try:
-        result = sh.kubectl(
-            *f"-n {model.name} get gateway/{gateway_name} -o=jsonpath='{{.status.listeners[0]}}'".split()
-        )
-        if result:
-            listener_status = json.loads(result[1:-1])
-            return listener_status
-        return None
+        c = lightkube.Client()
+        gateway = c.get(RESOURCE_TYPES["Gateway"], namespace=model.name, name=gateway_name)
+        return cast(dict, gateway.status["listeners"][0])
 
     except Exception as e:
         logger.error("Error retrieving Gateway listener condition: %s", e, exc_info=1)
@@ -67,13 +73,9 @@ async def get_listener_spec(ops_test: OpsTest, gateway_name: str) -> Optional[Di
     """
     model = ops_test.model.info
     try:
-        result = sh.kubectl(
-            *f"-n {model.name} get gateway/{gateway_name} -o=jsonpath='{{.spec.listeners[0]}}'".split()
-        )
-        if result:
-            listener_spec = json.loads(result[1:-1])
-            return listener_spec
-        return None
+        c = lightkube.Client()
+        gateway = c.get(RESOURCE_TYPES["Gateway"], namespace=model.name, name=gateway_name)
+        return gateway.spec["listeners"][0]
 
     except Exception as e:
         logger.error("Error retrieving Gateway listener condition: %s", e, exc_info=1)
@@ -92,13 +94,9 @@ async def get_route_spec(ops_test: OpsTest, route_name: str) -> Optional[Dict[st
     """
     model = ops_test.model.info
     try:
-        result = sh.kubectl(
-            *f"-n {model.name} get httproute/{route_name} -o=jsonpath='{{.spec}}'".split()
-        )
-        if result:
-            route_spec = json.loads(result[1:-1])
-            return route_spec
-        return None
+        c = lightkube.Client()
+        route = c.get(RESOURCE_TYPES["HTTPRoute"], namespace=model.name, name=route_name)
+        return route.spec
 
     except Exception as e:
         logger.error("Error retrieving HTTPRoute condition: %s", e, exc_info=1)
@@ -117,14 +115,9 @@ async def get_route_condition(ops_test: OpsTest, route_name: str) -> Optional[Di
     """
     model = ops_test.model.info
     try:
-        result = sh.kubectl(
-            *f"-n {model.name} get httproute/{route_name} -o=jsonpath='{{.status.parents[0]}}'".split()
-        )
-        if result:
-            route_status = json.loads(result[1:-1])
-            return route_status
-        return None
-
+        c = lightkube.Client()
+        route = c.get(RESOURCE_TYPES["HTTPRoute"], namespace=model.name, name=route_name)
+        return cast(dict, route.status["parents"][0])
     except Exception as e:
         logger.error("Error retrieving HTTPRoute condition: %s", e, exc_info=1)
         return None
