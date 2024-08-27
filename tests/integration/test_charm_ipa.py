@@ -117,8 +117,21 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
 
 
 @pytest.mark.abort_on_fail
-async def test_route_validity(ops_test: OpsTest):
-    await ops_test.model.applications[APP_NAME].set_config({"external_hostname": "foo.bar"})
+@pytest.mark.parametrize(
+    "external_hostname, expected_hostname",
+    [
+        ("foo.bar", "foo.bar"),  # Initial valid hostname
+        ("", None),  # Remove hostname
+        ("bar.foo", "bar.foo"),  # Change to a new valid hostname
+        ("10.1.1.1", None),  # Invalid hostname (should remove)
+    ],
+)
+async def test_route_validity(
+    ops_test: OpsTest, external_hostname: str, expected_hostname: Optional[str]
+):
+    await ops_test.model.applications[APP_NAME].set_config(
+        {"external_hostname": external_hostname}
+    )
     await ops_test.model.wait_for_idle([APP_NAME, "ipa-tester"])
 
     listener_condition = await get_listener_condition(ops_test, "istio-ingress-k8s")
@@ -133,7 +146,11 @@ async def test_route_validity(ops_test: OpsTest):
     assert route_condition["conditions"][0]["reason"] == "Accepted"
     assert route_condition["controllerName"] == "istio.io/gateway-controller"
 
-    assert listener_spec["hostname"] == "foo.bar"
+    # Validate the hostname in the listener spec
+    if not expected_hostname:
+        assert "hostname" not in listener_spec
+    else:
+        assert listener_spec["hostname"] == expected_hostname
 
 
 @pytest.mark.abort_on_fail

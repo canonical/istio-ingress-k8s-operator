@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock, PropertyMock, patch
+
 import pytest
 from ops.testing import Harness
 
@@ -54,3 +56,55 @@ def test_is_valid_hostname(hostname: str, expected: bool, harness: Harness[Istio
     charm = harness.charm
     result = charm._is_valid_hostname(hostname)
     assert result == expected, f"Hostname {hostname}: expected {expected}, got {result}"
+
+
+def test_is_valid_gateway(harness: Harness[IstioIngressCharm]):
+    harness.begin()
+    charm = harness.charm
+    harness.set_leader(True)
+
+    with patch.object(charm, "_get_gateway_resource_manager") as mock_krm, patch.object(
+        charm, "_construct_gateway"
+    ) as mock_construct_gateway, patch.object(charm, "_is_ready") as mock_is_ready:
+
+        mock_krm.return_value.reconcile = MagicMock()
+        mock_construct_gateway.return_value = MagicMock()
+        mock_is_ready.return_value = True
+        harness.update_config({"external_hostname": "foo.bar"})
+
+        # Ensure resource manager and waypoint construction were called
+        mock_krm.return_value.reconcile.assert_called_once()
+        mock_construct_gateway.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "external_hostname, expected_result",
+    [
+        ("foo.bar", "foo.bar"),
+        ("invalid_hostname!", "10.1.1.1"),
+        ("another.valid.hostname", "another.valid.hostname"),
+        ("", "10.1.1.1"),  # Edge case: empty hostname
+    ],
+)
+def test_external_hostname_config(
+    harness: Harness[IstioIngressCharm], external_hostname, expected_result
+):
+    harness.begin()
+    charm = harness.charm
+    harness.set_leader(True)
+
+    with patch.object(charm, "_get_gateway_resource_manager") as mock_krm, patch.object(
+        charm, "_construct_gateway"
+    ) as mock_construct_gateway, patch.object(charm, "_is_ready") as mock_is_ready, patch(
+        "charm.IstioIngressCharm._get_lb_external_address", new_callable=PropertyMock
+    ) as mock_get_lb_external_address:
+
+        mock_krm.return_value.reconcile = MagicMock()
+        mock_construct_gateway.return_value = MagicMock()
+        mock_is_ready.return_value = True
+        mock_get_lb_external_address.return_value = "10.1.1.1"
+
+        harness.update_config({"external_hostname": external_hostname})
+
+        # Check if the external hostname was set correctly
+        assert charm._external_host == expected_result

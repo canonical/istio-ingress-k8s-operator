@@ -18,12 +18,14 @@ from lightkube.generic_resource import create_namespaced_resource
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.apps_v1 import Deployment
 from lightkube.resources.core_v1 import Service
+from lightkube.types import PatchType
 from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
 from ops import BlockedStatus
 from ops.charm import CharmBase
 from ops.main import main
 from ops.model import ActiveStatus, MaintenanceStatus
 
+# from lightkube.models.meta_v1 import Patch
 from models import (
     AllowedRoutes,
     BackendRef,
@@ -160,8 +162,9 @@ class IstioIngressCharm(CharmBase):
                     and deployment.status.readyReplicas == deployment.status.replicas
                 ):
                     return True
-            except ApiError as e:
-                logger.error(f"Error checking gateway deployment status: {e}")
+                logger.warning("Deployment not ready, retrying...")
+            except ApiError:
+                logger.warning("Deployment not found, retrying...")
 
             time.sleep(check_interval)
 
@@ -178,6 +181,7 @@ class IstioIngressCharm(CharmBase):
             if lb_status:
                 return True
 
+            logger.warning("Loadbalancer not ready, retrying...")
             time.sleep(check_interval)
         return False
 
@@ -297,9 +301,43 @@ class IstioIngressCharm(CharmBase):
         resources_list = []
         krm = self._get_gateway_resource_manager()
 
+        # TODO: Delete below line when we figure out a way to unset hostname on reconcile if set to empty/invalid/unset
+        # this is due to the fact that the patch method used in lk.apply is patch.APPLY (https://github.com/gtsystem/lightkube/blob/75c71426d23963be94412ca6f26f77a7a61ab363/lightkube/core/client.py#L759)
+        # when we omit a field like hostname from the patch, apply does not remove the existing value
+        # it assumes that the omission means "do not change this field," not "delete this field."
+        # also worth noting that setting the value to None to remove it will result into a validation webhook error firing from k8s side
+        self._remove_hostname_if_present()
+
         resource_to_append = self._construct_gateway()
         resources_list.append(resource_to_append)
         krm.reconcile(resources_list)
+
+    def _remove_hostname_if_present(self):
+        """Remove the 'hostname' field from the first listener of the Gateway resource if it is present.
+
+        This is necessary because lightkube.apply with patch.APPLY
+        does not remove fields; it assumes omission means "do not change this field."
+        Setting the value to None results in a validation error from Kubernetes.
+        """
+        try:
+            existing_gateway = self.lightkube_client.get(
+                RESOURCE_TYPES["Gateway"], name=self.app.name, namespace=self.model.name
+            )
+            if (
+                existing_gateway.spec
+                and "listeners" in existing_gateway.spec
+                and len(existing_gateway.spec["listeners"]) > 0
+                and "hostname" in existing_gateway.spec["listeners"][0]
+            ):
+                self.lightkube_client.patch(
+                    RESOURCE_TYPES["Gateway"],
+                    name=self.app.name,
+                    namespace=self.model.name,
+                    obj=[{"op": "remove", "path": "/spec/listeners/0/hostname"}],
+                    patch_type=PatchType.JSON,
+                )
+        except ApiError:
+            return
 
     def _sync_ingress_resources(self):
         current_ingresses = []
@@ -351,7 +389,7 @@ class IstioIngressCharm(CharmBase):
             hostname = cast(str, external_hostname)
             if self._is_valid_hostname(hostname):
                 return hostname
-            logger.error("Invalid hostname provided, defaulting to loadbalancer external IP")
+            logger.warning("Invalid hostname provided, defaulting to loadbalancer external IP")
 
         return self._get_lb_external_address
 
