@@ -8,3 +8,13 @@ requires:
   ingress:
     interface: ingress
     limit: 1
+
+containers:
+  echo-server:
+    resource: echo-server-image
+
+resources:
+  echo-server-image:
+    type: oci-image
+    description: OCI image for echo server
+    upstream-source: jmalloc/echo-server:v0.3.7

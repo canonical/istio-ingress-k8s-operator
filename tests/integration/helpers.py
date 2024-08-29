@@ -1,4 +1,5 @@
 import logging
+import subprocess
 from typing import Any, Dict, Optional, cast
 
 import lightkube
@@ -127,3 +128,31 @@ def dequote(s: str):
     if isinstance(s, str) and s.startswith('"') and s.endswith('"'):
         s = s[1:-1]
     return s
+
+
+def send_curl_request(url: str, header: str = None) -> bool:
+    """Sends a curl request to the specified URL with an optional header.
+
+    Returns True if the request returns a 200 status code, otherwise False.
+
+    :param url: The URL to send the request to.
+    :param header: Optional header to include in the request (e.g., "Host: example.com").
+    :return: True if the response status is 200, False otherwise.
+    """
+    try:
+        # Construct the curl command
+        command = ["curl", "-o", "/dev/null", "-s", "-w", "%{http_code}", url]
+
+        # If a header is provided, add it to the command
+        if header:
+            command.extend(["-H", header])
+
+        # Run the curl command and capture the output
+        result = subprocess.run(command, capture_output=True, text=True)
+        status_code = result.stdout.strip()
+
+        # Check if the status code is 200
+        return status_code == "200"
+    except Exception as e:
+        logger.error("Error curling the specified URL: %s", e, exc_info=1)
+        return False

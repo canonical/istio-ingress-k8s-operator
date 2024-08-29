@@ -5,12 +5,10 @@ import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Optional
-from urllib.parse import urlparse
 
 import pytest
 import yaml
 from conftest import (
-    assert_can_connect,
     get_relation_data,
 )
 from helpers import (
@@ -19,6 +17,7 @@ from helpers import (
     get_listener_condition,
     get_listener_spec,
     get_route_condition,
+    send_curl_request,
 )
 from pytest_operator.plugin import OpsTest
 
@@ -66,7 +65,11 @@ async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
     )
 
     # Deploy ipa-tester
-    await ops_test.model.deploy(ipa_tester_charm, application_name="ipa-tester"),
+    await ops_test.model.deploy(
+        ipa_tester_charm,
+        application_name="ipa-tester",
+        resources={"echo-server-image": "jmalloc/echo-server:v0.3.7"},
+    ),
     await ops_test.model.wait_for_idle(
         [
             "ipa-tester",
@@ -102,18 +105,9 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
     requirer_app_data = data.requirer.application_data
     model = dequote(requirer_app_data["model"])
 
-    # Rel data assertions
-    assert dequote(requirer_app_data["name"]) == "ipa-tester"
-    assert dequote(requirer_app_data["port"]) == "80"
-
     istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
 
     assert url == f"http://{istio_ingress_address}/{model}-ipa-tester"
-
-    url_parts = urlparse(url)
-    ip = url_parts.hostname
-    port = url_parts.port or 80
-    assert_can_connect(ip, port)
 
 
 @pytest.mark.abort_on_fail
@@ -134,6 +128,18 @@ async def test_route_validity(
     )
     await ops_test.model.wait_for_idle([APP_NAME, "ipa-tester"])
 
+    data = get_relation_data(
+        requirer_endpoint="ipa-tester/0:ingress",
+        provider_endpoint="istio-ingress-k8s/0:ingress",
+        model=ops_test.model_full_name,
+    )
+
+    requirer_app_data = data.requirer.application_data
+    model = dequote(requirer_app_data["model"])
+
+    istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
+    curl_url = f"http://{istio_ingress_address}/{model}-ipa-tester"
+
     listener_condition = await get_listener_condition(ops_test, "istio-ingress-k8s")
     route_condition = await get_route_condition(ops_test, "ipa-tester")
     listener_spec = await get_listener_spec(ops_test, "istio-ingress-k8s")
@@ -146,11 +152,14 @@ async def test_route_validity(
     assert route_condition["conditions"][0]["reason"] == "Accepted"
     assert route_condition["controllerName"] == "istio.io/gateway-controller"
 
-    # Validate the hostname in the listener spec
     if not expected_hostname:
         assert "hostname" not in listener_spec
+        assert send_curl_request(curl_url)
     else:
         assert listener_spec["hostname"] == expected_hostname
+        assert send_curl_request(curl_url, f"Host:{expected_hostname}")
+        assert not send_curl_request(curl_url)
+        assert not send_curl_request(curl_url, "Host:random.hostname")
 
 
 @pytest.mark.abort_on_fail

@@ -6,7 +6,6 @@ import functools
 import logging
 import os
 import shutil
-import socket
 import subprocess
 from collections import defaultdict
 from dataclasses import dataclass
@@ -247,20 +246,3 @@ def get_relation_data(
         requirer_endpoint, provider_endpoint, include_default_juju_keys, model
     )
     return RelationData(provider=provider_data, requirer=requirer_data)
-
-
-def _can_connect(ip, port) -> bool:
-    target = (ip, int(port))
-    logger.info("Attempting to connect %s", target)
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.connect(target)
-        return True
-    except:  # noqa: E722
-        return False
-    finally:
-        s.close()
-
-
-def assert_can_connect(ip, port):
-    assert _can_connect(ip, port), f"{ip}:{port} is down/unreachable"
