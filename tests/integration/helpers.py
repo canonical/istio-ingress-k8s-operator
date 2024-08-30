@@ -1,8 +1,8 @@
 import logging
-import subprocess
 from typing import Any, Dict, Optional, cast
 
 import lightkube
+import requests
 from lightkube.generic_resource import create_namespaced_resource
 from lightkube.resources.core_v1 import Service
 from pytest_operator.plugin import OpsTest
@@ -114,10 +114,10 @@ async def get_route_condition(ops_test: OpsTest, route_name: str) -> Optional[Di
     Returns:
         A dictionary representing the status of the parent gateway the route is attached to, or None if not found.
     """
-    model = ops_test.model.info
+    model = ops_test.model.name
     try:
         c = lightkube.Client()
-        route = c.get(RESOURCE_TYPES["HTTPRoute"], namespace=model.name, name=route_name)
+        route = c.get(RESOURCE_TYPES["HTTPRoute"], namespace=model, name=route_name)
         return cast(dict, route.status["parents"][0])
     except Exception as e:
         logger.error("Error retrieving HTTPRoute condition: %s", e, exc_info=1)
@@ -130,29 +130,14 @@ def dequote(s: str):
     return s
 
 
-def send_curl_request(url: str, header: str = None) -> bool:
-    """Sends a curl request to the specified URL with an optional header.
+def send_http_request(url: str, headers: Optional[dict] = None) -> bool:
+    """Sends an request to the specified URL with an optional header.
 
     Returns True if the request returns a 200 status code, otherwise False.
 
     :param url: The URL to send the request to.
-    :param header: Optional header to include in the request (e.g., "Host: example.com").
+    :param headers: Optional header to include in the request (e.g., {"Host": "example.com").
     :return: True if the response status is 200, False otherwise.
     """
-    try:
-        # Construct the curl command
-        command = ["curl", "-o", "/dev/null", "-s", "-w", "%{http_code}", url]
-
-        # If a header is provided, add it to the command
-        if header:
-            command.extend(["-H", header])
-
-        # Run the curl command and capture the output
-        result = subprocess.run(command, capture_output=True, text=True)
-        status_code = result.stdout.strip()
-
-        # Check if the status code is 200
-        return status_code == "200"
-    except Exception as e:
-        logger.error("Error curling the specified URL: %s", e, exc_info=1)
-        return False
+    resp = requests.get(url=url, headers=headers)
+    return resp.status_code == 200

@@ -17,7 +17,7 @@ from helpers import (
     get_listener_condition,
     get_listener_spec,
     get_route_condition,
-    send_curl_request,
+    send_http_request,
 )
 from pytest_operator.plugin import OpsTest
 
@@ -130,7 +130,7 @@ async def test_route_validity(
     model = ops_test.model.name
 
     istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
-    curl_url = f"http://{istio_ingress_address}/{model}-ipa-tester"
+    tester_url = f"http://{istio_ingress_address}/{model}-ipa-tester"
 
     listener_condition = await get_listener_condition(ops_test, "istio-ingress-k8s")
     route_condition = await get_route_condition(ops_test, "ipa-tester")
@@ -146,12 +146,12 @@ async def test_route_validity(
 
     if not expected_hostname:
         assert "hostname" not in listener_spec
-        assert send_curl_request(curl_url)
+        assert send_http_request(tester_url)
     else:
         assert listener_spec["hostname"] == expected_hostname
-        assert send_curl_request(curl_url, f"Host:{expected_hostname}")
-        assert not send_curl_request(curl_url)
-        assert not send_curl_request(curl_url, "Host:random.hostname")
+        assert send_http_request(tester_url, {"Host": expected_hostname})
+        assert not send_http_request(tester_url)
+        assert not send_http_request(tester_url, {"Host": "random.hostname"})
 
 
 @pytest.mark.abort_on_fail
