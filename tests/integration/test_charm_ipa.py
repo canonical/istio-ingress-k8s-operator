@@ -117,7 +117,6 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
         ("foo.bar", "foo.bar"),  # Initial valid hostname
         ("", None),  # Remove hostname
         ("bar.foo", "bar.foo"),  # Change to a new valid hostname
-        ("10.1.1.1", None),  # Invalid hostname (should remove)
     ],
 )
 async def test_route_validity(

@@ -286,6 +286,13 @@ class IstioIngressCharm(CharmBase):
         )
 
     def _sync_all_resources(self):
+
+        if self._external_host is None:
+            self.unit.status = BlockedStatus(
+                "Invalid hostname provided, Please ensure this adheres to RFC 1123."
+            )
+            return
+
         self._sync_gateway_resources()
 
         self.unit.status = MaintenanceStatus("Validating gateway readiness")
@@ -301,16 +308,17 @@ class IstioIngressCharm(CharmBase):
         resources_list = []
         krm = self._get_gateway_resource_manager()
 
+        resource_to_append = self._construct_gateway()
+        resources_list.append(resource_to_append)
+        krm.reconcile(resources_list)
+
         # TODO: Delete below line when we figure out a way to unset hostname on reconcile if set to empty/invalid/unset
         # this is due to the fact that the patch method used in lk.apply is patch.APPLY (https://github.com/gtsystem/lightkube/blob/75c71426d23963be94412ca6f26f77a7a61ab363/lightkube/core/client.py#L759)
         # when we omit a field like hostname from the patch, apply does not remove the existing value
         # it assumes that the omission means "do not change this field," not "delete this field."
         # also worth noting that setting the value to None to remove it will result into a validation webhook error firing from k8s side
-        self._remove_hostname_if_present()
-
-        resource_to_append = self._construct_gateway()
-        resources_list.append(resource_to_append)
-        krm.reconcile(resources_list)
+        if not self._is_valid_hostname(self._external_host):
+            self._remove_hostname_if_present()
 
     def _remove_hostname_if_present(self):
         """Remove the 'hostname' field from the first listener of the Gateway resource if it is present.
@@ -323,19 +331,20 @@ class IstioIngressCharm(CharmBase):
             existing_gateway = self.lightkube_client.get(
                 RESOURCE_TYPES["Gateway"], name=self.app.name, namespace=self.model.name
             )
-            if (
-                existing_gateway.spec
-                and "listeners" in existing_gateway.spec
-                and len(existing_gateway.spec["listeners"]) > 0
-                and "hostname" in existing_gateway.spec["listeners"][0]
-            ):
-                self.lightkube_client.patch(
-                    RESOURCE_TYPES["Gateway"],
-                    name=self.app.name,
-                    namespace=self.model.name,
-                    obj=[{"op": "remove", "path": "/spec/listeners/0/hostname"}],
-                    patch_type=PatchType.JSON,
-                )
+            if existing_gateway.spec and "listeners" in existing_gateway.spec:
+                patches = []
+                for i, listener in enumerate(existing_gateway.spec["listeners"]):
+                    if "hostname" in listener:
+                        patches.append({"op": "remove", "path": f"/spec/listeners/{i}/hostname"})
+
+                if patches:
+                    self.lightkube_client.patch(
+                        RESOURCE_TYPES["Gateway"],
+                        name=self.app.name,
+                        namespace=self.model.name,
+                        obj=patches,
+                        patch_type=PatchType.JSON,
+                    )
         except ApiError:
             return
 
@@ -389,7 +398,8 @@ class IstioIngressCharm(CharmBase):
             hostname = cast(str, external_hostname)
             if self._is_valid_hostname(hostname):
                 return hostname
-            logger.warning("Invalid hostname provided, defaulting to loadbalancer external IP")
+            logger.error("Invalid hostname provided, Please ensure this adheres to RFC 1123")
+            return None
 
         return self._get_lb_external_address
 

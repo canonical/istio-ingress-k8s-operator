@@ -81,7 +81,7 @@ def test_is_valid_gateway(harness: Harness[IstioIngressCharm]):
     "external_hostname, expected_result",
     [
         ("foo.bar", "foo.bar"),
-        ("invalid_hostname!", "10.1.1.1"),
+        ("invalid_hostname!", None),
         ("another.valid.hostname", "another.valid.hostname"),
         ("", "10.1.1.1"),  # Edge case: empty hostname
     ],
@@ -103,8 +103,13 @@ def test_external_hostname_config(
         mock_construct_gateway.return_value = MagicMock()
         mock_is_ready.return_value = True
         mock_get_lb_external_address.return_value = "10.1.1.1"
-
         harness.update_config({"external_hostname": external_hostname})
-
-        # Check if the external hostname was set correctly
+        harness.evaluate_status()
+        if expected_result:
+            assert charm.unit.status.message == f"Serving at {expected_result}"
+        else:
+            assert (
+                charm.unit.status.message
+                == "Invalid hostname provided, Please ensure this adheres to RFC 1123."
+            )
         assert charm._external_host == expected_result
