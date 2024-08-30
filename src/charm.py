@@ -287,17 +287,16 @@ class IstioIngressCharm(CharmBase):
 
     def _sync_all_resources(self):
 
-        if self._external_host is None:
-            self.unit.status = BlockedStatus(
-                "Invalid hostname provided, Please ensure this adheres to RFC 1123."
-            )
-            return
-
         self._sync_gateway_resources()
 
         self.unit.status = MaintenanceStatus("Validating gateway readiness")
 
         if self._is_ready():
+            if not self._external_host:
+                self.unit.status = BlockedStatus(
+                    "Invalid hostname provided, Please ensure this adheres to RFC 1123."
+                )
+                return
             try:
                 self._sync_ingress_resources()
                 self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
