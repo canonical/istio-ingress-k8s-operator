@@ -127,14 +127,7 @@ async def test_route_validity(
     )
     await ops_test.model.wait_for_idle([APP_NAME, "ipa-tester"])
 
-    data = get_relation_data(
-        requirer_endpoint="ipa-tester/0:ingress",
-        provider_endpoint="istio-ingress-k8s/0:ingress",
-        model=ops_test.model_full_name,
-    )
-
-    requirer_app_data = data.requirer.application_data
-    model = dequote(requirer_app_data["model"])
+    model = ops_test.model.name
 
     istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
     curl_url = f"http://{istio_ingress_address}/{model}-ipa-tester"
