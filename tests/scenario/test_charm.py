@@ -2,6 +2,7 @@
 # See LICENSE file for licensing details.
 
 import scenario
+
 from charm import IstioIngressCharm
 
 

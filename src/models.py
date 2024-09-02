@@ -33,6 +33,7 @@ class Listener(BaseModel):
     port: int
     protocol: str
     allowedRoutes: AllowedRoutes  # noqa: N815
+    hostname: Optional[str] = None
 
 
 class IstioGatewaySpec(BaseModel):
@@ -111,6 +112,9 @@ class HTTPRouteResourceSpec(BaseModel):
 
     parentRefs: List[ParentRef]  # noqa: N815
     rules: List[Rule]
+
+    # TODO: uncomment the below when support is added for both wildcards and using subdomains
+    # hostnames: Optional[List[str]] = []
 
 
 class HTTPRouteResource(BaseModel):
