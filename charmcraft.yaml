@@ -60,3 +60,5 @@ provides:
     interface: ingress
     description: |
       Provides ingress-like routing to the related Juju application, load-balancing across all units
+  metrics-endpoint:
+    interface: prometheus_scrape

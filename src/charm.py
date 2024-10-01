@@ -10,6 +10,7 @@ import re
 import time
 from typing import Any, Dict, Optional, cast
 
+from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.traefik_k8s.v2.ingress import IngressPerAppProvider as IPAv2
 from charms.traefik_k8s.v2.ingress import IngressRequirerData
 from lightkube.core.client import Client
@@ -86,7 +87,19 @@ class IstioIngressCharm(CharmBase):
         self._lightkube_client = None
 
         self.ingress_per_appv2 = IPAv2(charm=self)
-
+        # Configure Observability
+        self._scraping = MetricsEndpointProvider(
+            self,
+            relation_name="metrics-endpoint",
+            jobs=[
+                {
+                    "metrics_path": "/stats/prometheus",
+                    "static_configs": [
+                        {"targets": [f"{self.managed_name}.{self.model.name}.svc:15020"]}
+                    ],
+                }
+            ],
+        )
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.remove, self._on_remove)
         self.framework.observe(
