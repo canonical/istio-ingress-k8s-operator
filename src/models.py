@@ -26,6 +26,25 @@ class AllowedRoutes(BaseModel):
     namespaces: Dict[str, str]
 
 
+class SecretObjectReference(BaseModel):
+    """SecretObjectReference defines a reference to a Kubernetes secret."""
+
+    group: Optional[str] = None
+    kind: Optional[str] = None
+    name: str
+    namespace: Optional[str] = None
+
+
+class GatewayTLSConfig(BaseModel):
+    """GatewayTLSConfig defines the TLS configuration for a listener."""
+
+    certificateRefs: Optional[List[SecretObjectReference]] = None
+    # Not yet implemented:
+    # mode
+    # frontendValidation
+    # options
+
+
 class Listener(BaseModel):
     """Listener defines a port and protocol configuration."""
 
@@ -34,6 +53,7 @@ class Listener(BaseModel):
     protocol: str
     allowedRoutes: AllowedRoutes  # noqa: N815
     hostname: Optional[str] = None
+    tls: Optional[GatewayTLSConfig] = None
 
 
 class IstioGatewaySpec(BaseModel):

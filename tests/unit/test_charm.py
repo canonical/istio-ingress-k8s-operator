@@ -103,6 +103,10 @@ def test_external_hostname_config(
         mock_construct_gateway.return_value = MagicMock()
         mock_is_ready.return_value = True
         mock_get_lb_external_address.return_value = "10.1.1.1"
+        # Unset the charm's cache of the external hostname.  This is required because while real config-changed event would
+        # create a new instance of the charm (and thus have a clean cache), the test harness reuses the same instance and
+        # the cache is populated on harness.begin().
+        charm._external_host_ = None
         harness.update_config({"external_hostname": external_hostname})
         harness.evaluate_status()
         if expected_result:
@@ -113,3 +117,26 @@ def test_external_hostname_config(
                 == "Invalid hostname provided, Please ensure this adheres to RFC 1123."
             )
         assert charm._external_host == expected_result
+
+
+def test_external_hostname_config_cached(harness: Harness[IstioIngressCharm]):
+    """Test that the external_hostname config is cached after the first access."""
+    expected_external_host = "example.com"
+    harness.update_config({"external_hostname": expected_external_host})
+    harness.set_leader(True)
+    harness.begin()
+    charm = harness.charm
+
+    # Fetch the external_host, which should be the config value
+    actual_external_host = charm._external_host
+    assert actual_external_host == expected_external_host
+
+    # Change the config and then access it again to confirm we get the cached value
+    # We need mocks here because `harness.update_config()` fires a config-changed event
+    with patch.object(charm, "_get_gateway_resource_manager"), patch.object(
+        charm, "_construct_gateway"
+    ), patch.object(charm, "_is_ready"), patch(
+        "charm.IstioIngressCharm._get_lb_external_address", new_callable=PropertyMock
+    ):
+        harness.update_config({"external_hostname": "new.com"})
+        assert charm._external_host == expected_external_host
