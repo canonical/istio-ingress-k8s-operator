@@ -35,6 +35,10 @@ parts:
       #      remove rpds-py from this list
       - "rpds-py"
 
+containers:
+  metrics-proxy:
+    resource: metrics-proxy-image
+
 config:
   options:
     ready-timeout:
@@ -62,3 +66,10 @@ provides:
       Provides ingress-like routing to the related Juju application, load-balancing across all units
   metrics-endpoint:
     interface: prometheus_scrape
+
+
+resources:
+  metrics-proxy-image:
+    type: oci-image
+    description: Metrics Proxy OCI image
+    upstream-source: localhost:32000/metrics-proxy:0.1
