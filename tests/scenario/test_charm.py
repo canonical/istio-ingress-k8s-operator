@@ -57,7 +57,11 @@ def test_construct_gateway_with_loadbalancer_address(
         # And that we configure a hostname
         assert gateway.spec["listeners"][0].get("hostname", None) == hostname
 
-
+@patch(
+    "charm.IstioIngressCharm._get_lb_external_address",
+    new_callable=PropertyMock,
+    return_value=None,
+)
 def test_construct_gateway_with_tls(
     _mock_get_lb_external_address, istio_ingress_charm, istio_ingress_context
 ):
