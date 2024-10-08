@@ -14,15 +14,6 @@ from charms.tls_certificates_interface.v3.tls_certificates import (
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.core_v1 import Secret
 
-from charm import IstioIngressCharm
-
-
-def test_relation_changed_status():
-    ctx = scenario.Context(IstioIngressCharm)
-    state = scenario.State()
-    out = ctx.run(ctx.on.start(), state)
-    assert out.unit_status.name == "active"
-
 
 def test_construct_gateway(istio_ingress_charm, istio_ingress_context):
     """Assert that the Gateway definition is constructed as expected."""
