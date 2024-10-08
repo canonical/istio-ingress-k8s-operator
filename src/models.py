@@ -3,7 +3,7 @@
 # Copyright 2024 Canonical Ltd.
 # See LICENSE file for licensing details.
 """This module defines Pydantic schemas for various resources used in the Kubernetes Gateway API."""
-
+from enum import Enum
 from typing import Dict, List, Optional
 
 from pydantic import BaseModel
@@ -76,6 +76,7 @@ class ParentRef(BaseModel):
 
     name: str
     namespace: str
+    sectionName: str
 
 
 class PathMatch(BaseModel):
@@ -98,17 +99,40 @@ class PrefixPathConfig(BaseModel):
     replacePrefixMatch: str = "/"  # noqa: N815
 
 
-class URLRewriteConfig(BaseModel):
+class HTTPRouteFilterType(str, Enum):
+    """HTTPRouteFilterType defines the type of HTTP filter."""
+
+    ExtensionRef = "ExtensionRef"
+    RequestHeaderModifier = "RequestHeaderModifier"
+    RequestMirror = "RequestMirror"
+    RequestRedirect = "RequestRedirect"
+    ResponseHeaderModifier = "ResponseHeaderModifier"
+    URLRewrite = "URLRewrite"
+
+
+class HTTPURLRewriteFilter(BaseModel):
     """URLRewriteConfig defines the configuration for URL rewriting."""
 
     path: PrefixPathConfig = PrefixPathConfig()
 
 
-class URLRewriteFilter(BaseModel):
-    """URLRewriteFilter defines the URL rewriting filter."""
+class HTTPRequestRedirectFilter(BaseModel):
+    """HTTPRequestRedirectConfig defines the configuration for request redirection."""
 
-    type: str = "URLRewrite"
-    urlRewrite: URLRewriteConfig = URLRewriteConfig()  # noqa: N815
+    scheme: str
+    statusCode: int
+    # Not implemented
+    # hostname
+    # path
+    # port
+
+
+class HTTPRouteFilter(BaseModel):
+    """HTTPRouteFilter defines the HTTP filter configuration."""
+
+    type: HTTPRouteFilterType
+    requestRedirect: Optional[HTTPRequestRedirectFilter] = None
+    urlRewrite: Optional[HTTPURLRewriteFilter] = None
 
 
 class BackendRef(BaseModel):
@@ -123,8 +147,8 @@ class Rule(BaseModel):
     """Rule defines the routing rule configuration."""
 
     matches: List[Match]
-    backendRefs: List[BackendRef]  # noqa: N815
-    filters: Optional[List[URLRewriteFilter]] = []
+    backendRefs: Optional[List[BackendRef]] = []  # noqa: N815
+    filters: Optional[List[HTTPRouteFilter]] = []
 
 
 class HTTPRouteResourceSpec(BaseModel):

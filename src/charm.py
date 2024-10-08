@@ -31,8 +31,12 @@ from models import (
     AllowedRoutes,
     BackendRef,
     GatewayTLSConfig,
+    HTTPRequestRedirectFilter,
+    HTTPRouteFilter,
+    HTTPRouteFilterType,
     HTTPRouteResource,
     HTTPRouteResourceSpec,
+    HTTPURLRewriteFilter,
     IstioGatewayResource,
     IstioGatewaySpec,
     Listener,
@@ -42,7 +46,6 @@ from models import (
     PathMatch,
     Rule,
     SecretObjectReference,
-    URLRewriteFilter,
 )
 
 logger = logging.getLogger(__name__)
@@ -269,45 +272,51 @@ class IstioIngressCharm(CharmBase):
     def _construct_gateway(self, tls_secret_name: Optional[str] = None):
         """Construct the Gateway resource for the ingress.
 
+        Gateway will always enable HTTP on port 80 and, if TLS is configured, HTTPS on port 443.
+
         Args:
             tls_secret_name (str): (Optional) The name of the secret containing the TLS certificates.  If specified, the
                                    gateway will be configured to use TLS with this secret for the certificates.
         """
-        if tls_secret_name:
-            tls_configuration = GatewayTLSConfig(
-                certificateRefs=[SecretObjectReference(name=tls_secret_name)]
-            )
-            protocol = "HTTPS"
-            port = 443
-        else:
-            tls_configuration = None
-            protocol = "HTTP"
-            port = 80
-
-        spec = IstioGatewaySpec(
-            gatewayClassName="istio",
-            listeners=[
-                Listener(
-                    name="default",
-                    port=port,
-                    protocol=protocol,
-                    allowedRoutes=AllowedRoutes(namespaces={"from": "All"}),
-                    **(
-                        {"hostname": self._external_host}
-                        if self._is_valid_hostname(self._external_host)
-                        else {}
-                    ),
-                    tls=tls_configuration,
-                )
-            ],
+        allowed_routes = AllowedRoutes(namespaces={"from": "All"})
+        hostname_config = (
+            {"hostname": self._external_host}
+            if self._is_valid_hostname(self._external_host)
+            else {}
         )
+        listeners = [
+            Listener(
+                name="http",
+                port=80,
+                protocol="HTTP",
+                allowedRoutes=allowed_routes,
+                **hostname_config,
+            )
+        ]
+
+        if tls_secret_name:
+            listeners.append(
+                Listener(
+                    name="https",
+                    port=443,
+                    protocol="HTTPS",
+                    allowedRoutes=allowed_routes,
+                    tls=GatewayTLSConfig(
+                        certificateRefs=[SecretObjectReference(name=tls_secret_name)]
+                    ),
+                    **hostname_config,
+                )
+            )
 
         gateway = IstioGatewayResource(
             metadata=Metadata(
                 name=self.app.name,
                 namespace=self.model.name,
             ),
-            spec=spec,
+            spec=IstioGatewaySpec(
+                gatewayClassName="istio",
+                listeners=listeners,
+            ),
         )
         gateway_resource = RESOURCE_TYPES["Gateway"]
         return gateway_resource(
@@ -315,10 +324,10 @@ class IstioIngressCharm(CharmBase):
             spec=gateway.spec.model_dump(exclude_none=True),
         )
 
-    def _construct_httproute(self, data: IngressRequirerData, prefix: str):
+    def _construct_httproute(self, data: IngressRequirerData, prefix: str, section_name: str):
         http_route = HTTPRouteResource(
             metadata=Metadata(
-                name=data.app.name,
+                name=data.app.name + "-" + section_name,
                 namespace=data.app.model,
             ),
             spec=HTTPRouteResourceSpec(
@@ -326,6 +335,7 @@ class IstioIngressCharm(CharmBase):
                     ParentRef(
                         name=self.app.name,
                         namespace=self.model.name,
+                        sectionName=section_name,
                     )
                 ],
                 rules=[
@@ -338,7 +348,55 @@ class IstioIngressCharm(CharmBase):
                                 namespace=data.app.model,
                             )
                         ],
-                        filters=([URLRewriteFilter()] if data.app.strip_prefix else []),
+                        filters=(
+                            [
+                                HTTPRouteFilter(
+                                    type=HTTPRouteFilterType.URLRewrite,
+                                    urlRewrite=HTTPURLRewriteFilter(),
+                                )
+                            ]
+                            if data.app.strip_prefix
+                            else []
+                        ),
+                    )
+                ],
+                # TODO: uncomment the below when support is added for both wildcards and using subdomains
+                # hostnames=[udata.host for udata in data.units],
+            ),
+        )
+        http_resource = RESOURCE_TYPES["HTTPRoute"]
+        return http_resource(
+            metadata=ObjectMeta.from_dict(http_route.metadata.model_dump()),
+            spec=http_route.spec.model_dump(),
+        )
+
+    def _construct_redirect_to_https_httproute(
+        self, data: IngressRequirerData, prefix: str, section_name: str
+    ):
+        http_route = HTTPRouteResource(
+            metadata=Metadata(
+                name=data.app.name + "-" + section_name,
+                namespace=data.app.model,
+            ),
+            spec=HTTPRouteResourceSpec(
+                parentRefs=[
+                    ParentRef(
+                        name=self.app.name,
+                        namespace=self.model.name,
+                        sectionName=section_name,
+                    )
+                ],
+                rules=[
+                    Rule(
+                        matches=[Match(path=PathMatch(value=prefix))],
+                        filters=[
+                            HTTPRouteFilter(
+                                type=HTTPRouteFilterType.RequestRedirect,
+                                requestRedirect=HTTPRequestRedirectFilter(
+                                    scheme="https", statusCode=301
+                                ),
+                            )
+                        ],
                     )
                 ],
                 # TODO: uncomment the below when support is added for both wildcards and using subdomains
@@ -422,6 +480,10 @@ class IstioIngressCharm(CharmBase):
             raise RuntimeError("Ingress can only be provided on the leader unit.")
 
         krm = self._get_ingress_resource_manager()
+
+        # If we can construct a gateway Secret, TLS is enabled so we should configure the routes accordingly
+        is_tls_enabled = self._construct_gateway_tls_secret() is not None
+
         for rel in self.model.relations["ingress"]:
 
             if not self.ingress_per_appv2.is_ready(rel):
@@ -430,10 +492,23 @@ class IstioIngressCharm(CharmBase):
 
             data = self.ingress_per_appv2.get_data(rel)
             prefix = self._generate_prefix(data.app.model_dump(by_alias=True))
-            resource_to_append = self._construct_httproute(data, prefix)
+            resources_to_append = []
+            if is_tls_enabled:
+                # TLS is configured, so we enable HTTPS route and redirect HTTP to HTTPS
+                resources_to_append.append(
+                    self._construct_redirect_to_https_httproute(data, prefix, section_name="http")
+                )
+                resources_to_append.append(
+                    self._construct_httproute(data, prefix, section_name="https")
+                )
+            else:
+                # Else, we enable only an HTTP route
+                resources_to_append.append(
+                    self._construct_httproute(data, prefix, section_name="http")
+                )
 
             if rel.active:
-                current_ingresses.append(resource_to_append)
+                current_ingresses.extend(resources_to_append)
                 external_url = self._generate_external_url(prefix)
                 relation_mappings[rel] = external_url
 

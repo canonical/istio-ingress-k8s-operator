@@ -1,6 +1,7 @@
 # Copyright 2024 Canonical Ltd.
 # See LICENSE file for licensing details.
 import json
+from typing import Optional
 from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
@@ -25,7 +26,7 @@ def test_construct_gateway(istio_ingress_charm, istio_ingress_context):
         gateway = charm._construct_gateway()
 
         # Simple spot check of the Gateway object
-        assert gateway.spec["listeners"][0]["name"] == "default"
+        assert gateway.spec["listeners"][0]["name"] == "http"
 
         # Assert that TLS is not configured
         assert gateway.spec["listeners"][0].get("tls", None) is None
@@ -48,14 +49,9 @@ def test_construct_gateway_with_loadbalancer_address(
         charm = manager.charm
         gateway = charm._construct_gateway()
 
-        # Simple spot check of the Gateway object
-        assert gateway.spec["listeners"][0]["name"] == "default"
+        # Assert that the Gateway has an http listener with the correct configurations
+        _validate_gateway_listener(gateway, "http", hostname, tls_secret_name=None)
 
-        # Assert that TLS is not configured
-        assert gateway.spec["listeners"][0].get("tls", None) is None
-
-        # And that we configure a hostname
-        assert gateway.spec["listeners"][0].get("hostname", None) == hostname
 
 @patch(
     "charm.IstioIngressCharm._get_lb_external_address",
@@ -63,9 +59,11 @@ def test_construct_gateway_with_loadbalancer_address(
     return_value=None,
 )
 def test_construct_gateway_with_tls(
-    _mock_get_lb_external_address, istio_ingress_charm, istio_ingress_context
+    mock_get_lb_external_address, istio_ingress_charm, istio_ingress_context
 ):
     """Assert that when TLS is configured, the Gateway definition is constructed using TLS as expected."""
+    hostname = "example.com"
+    mock_get_lb_external_address.return_value = hostname
     with istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(),
@@ -74,13 +72,13 @@ def test_construct_gateway_with_tls(
         tls_secret_name = "tls-secret"
         gateway = charm._construct_gateway(tls_secret_name=tls_secret_name)
 
-        # Assert that the Gateway includes TLS
-        assert len(gateway.spec["listeners"][0]["tls"]["certificateRefs"]) == 1
-        assert gateway.spec["listeners"][0]["tls"]["certificateRefs"][0]["name"] == tls_secret_name
+        # Assert that the Gateway has http and https listeners with the correct configurations.
+        _validate_gateway_listener(gateway, "http", hostname, tls_secret_name=None)
+        _validate_gateway_listener(gateway, "https", hostname, tls_secret_name=tls_secret_name)
 
 
 def test_sync_gateway_resources_without_tls(istio_ingress_charm, istio_ingress_context):
-    """Test that when we have no TLS relation, the Gateway is created as expected."""
+    """Test that when we have no TLS relation, the Gateway has only an http listener."""
     mock_krm = MagicMock()
     mock_krm_factory = MagicMock(return_value=mock_krm)
 
@@ -95,9 +93,12 @@ def test_sync_gateway_resources_without_tls(istio_ingress_charm, istio_ingress_c
         # Assert that we've tried to reconcile the kubernetes resources
         charm._get_gateway_resource_manager().reconcile.assert_called_once()
 
-        # Assert that the Gateway resource has been created without TLS configuration
+        # Assert that the Gateway resource has been created with only an http listener
         gateway = charm._get_gateway_resource_manager().reconcile.call_args[0][0][0]
-        assert gateway.spec["listeners"][0].get("tls", None) is None
+        _validate_gateway_listener(gateway, "http", tls_secret_name=None)
+
+        with pytest.raises(KeyError):
+            _get_listener_given_name(gateway, "https")
 
 
 @patch(
@@ -108,7 +109,7 @@ def test_sync_gateway_resources_without_tls(istio_ingress_charm, istio_ingress_c
 def test_sync_gateway_resources_with_tls_without_loadbalancer_address(
     istio_ingress_charm, istio_ingress_context
 ):
-    """Test that when we have a full TLS relation but no LoadBalancer address, the Gateway is created without TLS."""
+    """Test that when we have a full TLS relation but no LoadBalancer address, the Gateway has only an http listener."""
     mock_krm = MagicMock()
     mock_krm_factory = MagicMock(return_value=mock_krm)
 
@@ -123,16 +124,19 @@ def test_sync_gateway_resources_with_tls_without_loadbalancer_address(
         # Assert that we've tried to reconcile the kubernetes resources
         charm._get_gateway_resource_manager().reconcile.assert_called_once()
 
-        # Assert that the Gateway resource has been created with TLS configuration
+        # Assert that the Gateway resource has been created with only an http listener
         gateway = charm._get_gateway_resource_manager().reconcile.call_args[0][0][0]
-        assert gateway.spec["listeners"][0].get("tls", None) is None
+        _validate_gateway_listener(gateway, "http", tls_secret_name=None)
+
+        with pytest.raises(KeyError):
+            _get_listener_given_name(gateway, "https")
 
 
 @patch("charm.IstioIngressCharm._get_lb_external_address", new_callable=PropertyMock)
 def test_sync_gateway_resources_with_tls_with_loadbalancer_address(
     mock_get_lb_external_address, istio_ingress_charm, istio_ingress_context
 ):
-    """Test that when we have a TLS relation and a LoadBalancer address, the Gateway is created with TLS configured."""
+    """Test that when we have a TLS relation and a LoadBalancer address, the Gateway has http and https listeners."""
     mock_krm = MagicMock()
     mock_krm_factory = MagicMock(return_value=mock_krm)
     hostname = "example.com"
@@ -154,9 +158,12 @@ def test_sync_gateway_resources_with_tls_with_loadbalancer_address(
         secret = charm._get_gateway_resource_manager().reconcile.call_args[0][0][0]
         assert secret.stringData["tls.crt"] == certificate_info["certificate_string"]
 
-        # Assert that the Gateway resource has been created with TLS configuration
+        # Assert that the Gateway was created and has http and https listeners with the correct configurations.
         gateway = charm._get_gateway_resource_manager().reconcile.call_args[0][0][1]
-        assert gateway.spec["listeners"][0].get("tls", None) is not None
+        _validate_gateway_listener(gateway, "http", hostname, tls_secret_name=None)
+        _validate_gateway_listener(
+            gateway, "https", hostname, tls_secret_name=charm._certificate_secret_name
+        )
 
 
 def test_sync_gateway_resources_with_tls_with_external_hostname_config(
@@ -185,9 +192,12 @@ def test_sync_gateway_resources_with_tls_with_external_hostname_config(
         secret = charm._get_gateway_resource_manager().reconcile.call_args[0][0][0]
         assert secret.stringData.get("tls.crt", None) is not None
 
-        # Assert that the Gateway resource has been created with TLS configuration
+        # Assert that the Gateway was created and has http and https listeners with the correct configurations.
         gateway = charm._get_gateway_resource_manager().reconcile.call_args[0][0][1]
-        assert gateway.spec["listeners"][0].get("tls", None) is not None
+        _validate_gateway_listener(gateway, "http", hostname, tls_secret_name=None)
+        _validate_gateway_listener(
+            gateway, "https", hostname, tls_secret_name=charm._certificate_secret_name
+        )
 
 
 @pytest.mark.parametrize(
@@ -308,3 +318,28 @@ def generate_certificates_relation(subject="example.com"):
         },
     )
     return to_return
+
+
+def _validate_gateway_listener(
+    gateway,
+    listener_name: str,
+    hostname: Optional[str] = None,
+    tls_secret_name: Optional[str] = None,
+):
+    """Validates the Gateway object has the listener with expected configuration."""
+    listener = _get_listener_given_name(gateway, listener_name)
+    if hostname:
+        assert listener.get("hostname", None) == hostname
+    if tls_secret_name:
+        assert len(listener["tls"]["certificateRefs"]) == 1
+        assert listener["tls"]["certificateRefs"][0]["name"] == tls_secret_name
+    else:
+        assert listener.get("tls", None) is None
+
+
+def _get_listener_given_name(gateway, name: str):
+    """Helper function to get a listener from a Gateway by name."""
+    for listener in gateway.spec["listeners"]:
+        if listener["name"] == name:
+            return listener
+    raise KeyError(f"Listener with name {name} not found")
