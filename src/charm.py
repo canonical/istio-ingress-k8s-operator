@@ -10,6 +10,7 @@ import re
 import time
 from typing import Any, Dict, Optional, cast
 
+from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.traefik_k8s.v2.ingress import IngressPerAppProvider as IPAv2
 from charms.traefik_k8s.v2.ingress import IngressRequirerData
 from lightkube.core.client import Client
@@ -24,6 +25,7 @@ from ops import BlockedStatus
 from ops.charm import CharmBase
 from ops.main import main
 from ops.model import ActiveStatus, MaintenanceStatus
+from ops.pebble import ChangeError, Layer
 
 # from lightkube.models.meta_v1 import Patch
 from models import (
@@ -69,6 +71,7 @@ INGRESS_RESOURCE_TYPES = {
 }
 GATEWAY_LABEL = "istio-gateway"
 INGRESS_LABEL = "istio-ingress"
+METRICS_LABELS = {"charms.canonical.com/istio.io.ingress.metrics": "aggregated"}
 
 
 class DataValidationError(RuntimeError):
@@ -86,7 +89,15 @@ class IstioIngressCharm(CharmBase):
         self._lightkube_client = None
 
         self.ingress_per_appv2 = IPAv2(charm=self)
-
+        self._metrics_labels = ",".join(
+            [f"{key}={value}" for key, value in METRICS_LABELS.items()]
+        )
+        # Configure Observability
+        self._scraping = MetricsEndpointProvider(
+            self,
+            relation_name="metrics-endpoint",
+            jobs=[{"static_configs": [{"targets": ["*:15090"]}]}],
+        )
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.remove, self._on_remove)
         self.framework.observe(
@@ -104,6 +115,33 @@ class IstioIngressCharm(CharmBase):
                 namespace=self.model.name, field_manager=self._lightkube_field_manager
             )
         return self._lightkube_client
+
+    def _setup_pebble_service(self):
+        """Define and start the metrics broadcast proxy Pebble service."""
+        container = self.unit.get_container("metrics-proxy")
+        if not container.can_connect():
+            return
+        pebble_layer = Layer(
+            {
+                "summary": "Metrics Broadcast Proxy Layer",
+                "description": "Pebble layer for metrics broadcast proxy",
+                "services": {
+                    "metrics-proxy": {
+                        "override": "replace",
+                        "summary": "Metrics Broadcast Proxy",
+                        "command": f"metrics-proxy --labels {self._metrics_labels}",
+                        "startup": "enabled",
+                    }
+                },
+            }
+        )
+
+        container.add_layer("metrics-proxy", pebble_layer, combine=True)
+
+        try:
+            container.replan()
+        except ChangeError as e:
+            logger.error(f"Error while replanning container: {e}")
 
     def _get_gateway_resource_manager(self):
         return KubernetesResourceManager(
@@ -225,6 +263,7 @@ class IstioIngressCharm(CharmBase):
             metadata=Metadata(
                 name=self.app.name,
                 namespace=self.model.name,
+                labels={**METRICS_LABELS},
             ),
             spec=IstioGatewaySpec(
                 gatewayClassName="istio",
@@ -299,6 +338,7 @@ class IstioIngressCharm(CharmBase):
                 return
             try:
                 self._sync_ingress_resources()
+                self._setup_pebble_service()
                 self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
             except DataValidationError or ApiError:
                 self.unit.status = BlockedStatus("Issue with setting up an ingress")
