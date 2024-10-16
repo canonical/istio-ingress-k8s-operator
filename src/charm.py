@@ -367,7 +367,8 @@ class IstioIngressCharm(CharmBase):
         http_resource = RESOURCE_TYPES["HTTPRoute"]
         return http_resource(
             metadata=ObjectMeta.from_dict(http_route.metadata.model_dump()),
-            spec=http_route.spec.model_dump(),
+            # Export without unset and None because None means nil in Kubernetes, which is not what we want.
+            spec=http_route.spec.model_dump(exclude_unset=True, exclude_none=True),
         )
 
     def _construct_redirect_to_https_httproute(
@@ -406,7 +407,8 @@ class IstioIngressCharm(CharmBase):
         http_resource = RESOURCE_TYPES["HTTPRoute"]
         return http_resource(
             metadata=ObjectMeta.from_dict(http_route.metadata.model_dump()),
-            spec=http_route.spec.model_dump(),
+            # Export without unset and None because None means nil in Kubernetes, which is not what we want.
+            spec=http_route.spec.model_dump(exclude_unset=True, exclude_none=True),
         )
 
     def _sync_all_resources(self):
