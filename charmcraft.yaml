@@ -35,6 +35,10 @@ parts:
       #      remove rpds-py from this list
       - "rpds-py"
 
+containers:
+  metrics-proxy:
+    resource: metrics-proxy-image
+
 config:
   options:
     ready-timeout:
@@ -60,3 +64,14 @@ provides:
     interface: ingress
     description: |
       Provides ingress-like routing to the related Juju application, load-balancing across all units
+  metrics-endpoint:
+    interface: prometheus_scrape
+
+
+resources:
+  metrics-proxy-image:
+    type: oci-image
+    description: Metrics Proxy OCI image
+    # TODO: change below to point at the correct image once metrics-proxy rock is onboarded
+    # see: https://github.com/canonical/oci-factory/issues/268
+    upstream-source: docker.io/ibraaoad/metrics-proxy:v0.1.0

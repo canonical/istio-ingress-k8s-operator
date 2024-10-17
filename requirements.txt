@@ -12,3 +12,4 @@ lightkube-extensions @ git+https://github.com/canonical/lightkube-extensions.git
 # Docs: https://python-jsonschema.readthedocs.io/
 # Deps: traefik_k8s libs
 jsonschema >= 4.22.0
+cosl
