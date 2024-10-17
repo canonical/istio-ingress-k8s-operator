@@ -25,6 +25,9 @@ logger = logging.getLogger(__name__)
 
 METADATA = yaml.safe_load(Path("./charmcraft.yaml").read_text())
 APP_NAME = METADATA["name"]
+resources = {
+    "metrics-proxy-image": METADATA["resources"]["metrics-proxy-image"]["upstream-source"],
+}
 
 
 @dataclass
@@ -81,7 +84,9 @@ async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
 
 @pytest.mark.abort_on_fail
 async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
-    await ops_test.model.deploy(istio_ingress_charm, application_name=APP_NAME, trust=True),
+    await ops_test.model.deploy(
+        istio_ingress_charm, resources=resources, application_name=APP_NAME, trust=True
+    ),
     await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=1000)
 
 

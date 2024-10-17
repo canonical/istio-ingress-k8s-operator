@@ -71,7 +71,6 @@ INGRESS_RESOURCE_TYPES = {
 }
 GATEWAY_LABEL = "istio-gateway"
 INGRESS_LABEL = "istio-ingress"
-METRICS_LABELS = {"charms.canonical.com/istio.io.ingress.metrics": "aggregated"}
 
 
 class DataValidationError(RuntimeError):
@@ -89,13 +88,12 @@ class IstioIngressCharm(CharmBase):
         self._lightkube_client = None
 
         self.ingress_per_appv2 = IPAv2(charm=self)
-        self._metrics_labels = ",".join(
-            [f"{key}={value}" for key, value in METRICS_LABELS.items()]
-        )
+        self.telemetry_labels = {
+            f"charms.canonical.com/{self.model.name}.{self.app.name}.telemetry": "aggregated"
+        }
         # Configure Observability
         self._scraping = MetricsEndpointProvider(
             self,
-            relation_name="metrics-endpoint",
             jobs=[{"static_configs": [{"targets": ["*:15090"]}]}],
         )
         self.framework.observe(self.on.config_changed, self._on_config_changed)
@@ -105,6 +103,9 @@ class IstioIngressCharm(CharmBase):
         )
         self.framework.observe(
             self.ingress_per_appv2.on.data_removed, self._on_ingress_data_removed
+        )
+        self.framework.observe(
+            self.on.metrics_proxy_pebble_ready, self._metrics_proxy_pebble_ready
         )
 
     @property
@@ -116,32 +117,32 @@ class IstioIngressCharm(CharmBase):
             )
         return self._lightkube_client
 
-    def _setup_pebble_service(self):
+    def _setup_proxy_pebble_service(self):
         """Define and start the metrics broadcast proxy Pebble service."""
-        container = self.unit.get_container("metrics-proxy")
-        if not container.can_connect():
+        proxy_container = self.unit.get_container("metrics-proxy")
+        if not proxy_container.can_connect():
             return
-        pebble_layer = Layer(
+        proxy_layer = Layer(
             {
                 "summary": "Metrics Broadcast Proxy Layer",
-                "description": "Pebble layer for metrics broadcast proxy",
+                "description": "Pebble layer for the metrics broadcast proxy",
                 "services": {
                     "metrics-proxy": {
                         "override": "replace",
                         "summary": "Metrics Broadcast Proxy",
-                        "command": f"metrics-proxy --labels {self._metrics_labels}",
+                        "command": f"metrics-proxy --labels {self.format_labels(self.telemetry_labels)}",
                         "startup": "enabled",
                     }
                 },
             }
         )
 
-        container.add_layer("metrics-proxy", pebble_layer, combine=True)
+        proxy_container.add_layer("metrics-proxy", proxy_layer, combine=True)
 
         try:
-            container.replan()
+            proxy_container.replan()
         except ChangeError as e:
-            logger.error(f"Error while replanning container: {e}")
+            logger.error(f"Error while replanning proxy container: {e}")
 
     def _get_gateway_resource_manager(self):
         return KubernetesResourceManager(
@@ -165,6 +166,10 @@ class IstioIngressCharm(CharmBase):
 
     def _on_config_changed(self, _):
         """Event handler for config changed."""
+        self._sync_all_resources()
+
+    def _metrics_proxy_pebble_ready(self, _):
+        """Event handler for metrics_proxy_pebble_ready."""
         self._sync_all_resources()
 
     def _on_remove(self, _):
@@ -263,7 +268,7 @@ class IstioIngressCharm(CharmBase):
             metadata=Metadata(
                 name=self.app.name,
                 namespace=self.model.name,
-                labels={**METRICS_LABELS},
+                labels={**self.telemetry_labels},
             ),
             spec=IstioGatewaySpec(
                 gatewayClassName="istio",
@@ -338,7 +343,7 @@ class IstioIngressCharm(CharmBase):
                 return
             try:
                 self._sync_ingress_resources()
-                self._setup_pebble_service()
+                self._setup_proxy_pebble_service()
                 self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
             except DataValidationError or ApiError:
                 self.unit.status = BlockedStatus("Issue with setting up an ingress")
@@ -482,6 +487,11 @@ class IstioIngressCharm(CharmBase):
             return False
 
         return True
+
+    @staticmethod
+    def format_labels(label_dict: Dict[str, str]) -> str:
+        """Format a dictionary into a comma-separated string of key=value pairs."""
+        return ",".join(f"{key}={value}" for key, value in label_dict.items())
 
 
 if __name__ == "__main__":
