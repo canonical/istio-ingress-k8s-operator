@@ -10,6 +10,7 @@ import re
 import time
 from typing import Any, Dict, Optional, cast
 
+from charms.observability_libs.v1.cert_handler import CertHandler
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.traefik_k8s.v2.ingress import IngressPerAppProvider as IPAv2
 from charms.traefik_k8s.v2.ingress import IngressRequirerData
@@ -18,10 +19,10 @@ from lightkube.core.exceptions import ApiError
 from lightkube.generic_resource import create_namespaced_resource
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.apps_v1 import Deployment
-from lightkube.resources.core_v1 import Service
+from lightkube.resources.core_v1 import Secret, Service
 from lightkube.types import PatchType
 from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
-from ops import BlockedStatus
+from ops import BlockedStatus, EventBase
 from ops.charm import CharmBase
 from ops.main import main
 from ops.model import ActiveStatus, MaintenanceStatus
@@ -31,8 +32,13 @@ from ops.pebble import ChangeError, Layer
 from models import (
     AllowedRoutes,
     BackendRef,
+    GatewayTLSConfig,
+    HTTPRequestRedirectFilter,
+    HTTPRouteFilter,
+    HTTPRouteFilterType,
     HTTPRouteResource,
     HTTPRouteResourceSpec,
+    HTTPURLRewriteFilter,
     IstioGatewayResource,
     IstioGatewaySpec,
     Listener,
@@ -41,7 +47,7 @@ from models import (
     ParentRef,
     PathMatch,
     Rule,
-    URLRewriteFilter,
+    SecretObjectReference,
 )
 
 logger = logging.getLogger(__name__)
@@ -62,8 +68,7 @@ RESOURCE_TYPES = {
     ),
 }
 
-
-GATEWAY_RESOURCE_TYPES = {RESOURCE_TYPES["Gateway"]}
+GATEWAY_RESOURCE_TYPES = {RESOURCE_TYPES["Gateway"], Secret}
 INGRESS_RESOURCE_TYPES = {
     RESOURCE_TYPES["GRPCRoute"],
     RESOURCE_TYPES["ReferenceGrant"],
@@ -77,11 +82,27 @@ class DataValidationError(RuntimeError):
     """Raised when data validation fails on IPU relation data."""
 
 
+class DisabledCertHandler:
+    """A mock CertHandler class that mimics being unavailable."""
+
+    available: bool = False
+    server_cert = None
+    private_key = None
+
+
+class RefreshCerts(EventBase):
+    """Event raised when the charm wants the certs to be refreshed."""
+
+
 class IstioIngressCharm(CharmBase):
     """Charm the service."""
 
     def __init__(self, *args):
         super().__init__(*args)
+        # Add a custom event that we can emit to request a cert refresh
+        self.on.define_event("refresh_certs", RefreshCerts)
+
+        self._external_host_ = None
 
         self.managed_name = f"{self.app.name}-istio"
         self._lightkube_field_manager: str = self.app.name
@@ -107,6 +128,29 @@ class IstioIngressCharm(CharmBase):
         self.framework.observe(
             self.on.metrics_proxy_pebble_ready, self._metrics_proxy_pebble_ready
         )
+
+        # During the initialisation of the charm, we do not have a LoadBalancer and thus a LoadBalancer external IP.
+        # If we need that IP to request the certs, disable cert handling until we have it.
+        if (external_hostname := self._external_host) is None:
+            logger.debug(
+                "External hostname is not set and no load balancer ip available.  TLS certificate generation disabled"
+            )
+            self._cert_handler = DisabledCertHandler()
+        else:
+            self._cert_handler = CertHandler(
+                self,
+                key="istio-ingress-cert",  # TODO: how is this key used?  if we have two ingresses, do we get issues?
+                peer_relation_name="peers",
+                certificates_relation_name="certificates",
+                sans=[external_hostname],
+                # Use a custom event for the charm to signal to the library that we may have changed something
+                # meaningful for the CSR.  CertHandler will only regenerate the CSR and obtain new certs if it detects
+                # a change when handling this event.
+                refresh_events=[self.on.refresh_certs],
+            )
+            self.framework.observe(
+                self._cert_handler.on.cert_changed, self._on_cert_handler_cert_changed
+            )
 
     @property
     def lightkube_client(self):
@@ -163,6 +207,10 @@ class IstioIngressCharm(CharmBase):
             lightkube_client=self.lightkube_client,
             logger=logger,
         )
+
+    def _on_cert_handler_cert_changed(self, _):
+        """Event handler for when tls certificates have changed."""
+        self._sync_all_resources()
 
     def _on_config_changed(self, _):
         """Event handler for config changed."""
@@ -263,7 +311,54 @@ class IstioIngressCharm(CharmBase):
 
         return True
 
-    def _construct_gateway(self):
+    def _construct_gateway_tls_secret(self):
+        """Return the TLS secret resource for the gateway if TLS is configured, otherwise None."""
+        if not self._cert_handler.available:
+            return None
+
+        return Secret(
+            metadata=ObjectMeta(name=self._certificate_secret_name),
+            stringData={
+                "tls.crt": self._cert_handler.server_cert,
+                "tls.key": self._cert_handler.private_key,
+            },
+        )
+
+    def _construct_gateway(self, tls_secret_name: Optional[str] = None):
+        """Construct the Gateway resource for the ingress.
+
+        Gateway will always enable HTTP on port 80 and, if TLS is configured, HTTPS on port 443.
+
+        Args:
+            tls_secret_name (str): (Optional) The name of the secret containing the TLS certificates.  If specified, the
+                                   gateway will be configured to use TLS with this secret for the certificates.
+        """
+        allowed_routes = AllowedRoutes(namespaces={"from": "All"})
+        hostname = self._external_host if self._is_valid_hostname(self._external_host) else None
+        listeners = [
+            Listener(
+                name="http",
+                port=80,
+                protocol="HTTP",
+                allowedRoutes=allowed_routes,
+                hostname=hostname,
+            )
+        ]
+
+        if tls_secret_name:
+            listeners.append(
+                Listener(
+                    name="https",
+                    port=443,
+                    protocol="HTTPS",
+                    allowedRoutes=allowed_routes,
+                    tls=GatewayTLSConfig(
+                        certificateRefs=[SecretObjectReference(name=tls_secret_name)]
+                    ),
+                    hostname=hostname,
+                )
+            )
+
         gateway = IstioGatewayResource(
             metadata=Metadata(
                 name=self.app.name,
@@ -272,19 +367,7 @@ class IstioIngressCharm(CharmBase):
             ),
             spec=IstioGatewaySpec(
                 gatewayClassName="istio",
-                listeners=[
-                    Listener(
-                        name="default",
-                        port=80,
-                        protocol="HTTP",
-                        allowedRoutes=AllowedRoutes(namespaces={"from": "All"}),
-                        **(
-                            {"hostname": self._external_host}
-                            if self._is_valid_hostname(self._external_host)
-                            else {}
-                        ),
-                    )
-                ],
+                listeners=listeners,
             ),
         )
         gateway_resource = RESOURCE_TYPES["Gateway"]
@@ -293,10 +376,10 @@ class IstioIngressCharm(CharmBase):
             spec=gateway.spec.model_dump(exclude_none=True),
         )
 
-    def _construct_httproute(self, data: IngressRequirerData, prefix: str):
+    def _construct_httproute(self, data: IngressRequirerData, prefix: str, section_name: str):
         http_route = HTTPRouteResource(
             metadata=Metadata(
-                name=data.app.name,
+                name=data.app.name + "-" + section_name,
                 namespace=data.app.model,
             ),
             spec=HTTPRouteResourceSpec(
@@ -304,6 +387,7 @@ class IstioIngressCharm(CharmBase):
                     ParentRef(
                         name=self.app.name,
                         namespace=self.model.name,
+                        sectionName=section_name,
                     )
                 ],
                 rules=[
@@ -316,7 +400,16 @@ class IstioIngressCharm(CharmBase):
                                 namespace=data.app.model,
                             )
                         ],
-                        filters=([URLRewriteFilter()] if data.app.strip_prefix else []),
+                        filters=(
+                            [
+                                HTTPRouteFilter(
+                                    type=HTTPRouteFilterType.URLRewrite,
+                                    urlRewrite=HTTPURLRewriteFilter(),
+                                )
+                            ]
+                            if data.app.strip_prefix
+                            else []
+                        ),
                     )
                 ],
                 # TODO: uncomment the below when support is added for both wildcards and using subdomains
@@ -326,11 +419,51 @@ class IstioIngressCharm(CharmBase):
         http_resource = RESOURCE_TYPES["HTTPRoute"]
         return http_resource(
             metadata=ObjectMeta.from_dict(http_route.metadata.model_dump()),
-            spec=http_route.spec.model_dump(),
+            # Export without unset and None because None means nil in Kubernetes, which is not what we want.
+            spec=http_route.spec.model_dump(exclude_unset=True, exclude_none=True),
+        )
+
+    def _construct_redirect_to_https_httproute(
+        self, data: IngressRequirerData, prefix: str, section_name: str
+    ):
+        http_route = HTTPRouteResource(
+            metadata=Metadata(
+                name=data.app.name + "-" + section_name,
+                namespace=data.app.model,
+            ),
+            spec=HTTPRouteResourceSpec(
+                parentRefs=[
+                    ParentRef(
+                        name=self.app.name,
+                        namespace=self.model.name,
+                        sectionName=section_name,
+                    )
+                ],
+                rules=[
+                    Rule(
+                        matches=[Match(path=PathMatch(value=prefix))],
+                        filters=[
+                            HTTPRouteFilter(
+                                type=HTTPRouteFilterType.RequestRedirect,
+                                requestRedirect=HTTPRequestRedirectFilter(
+                                    scheme="https", statusCode=301
+                                ),
+                            )
+                        ],
+                    )
+                ],
+                # TODO: uncomment the below when support is added for both wildcards and using subdomains
+                # hostnames=[udata.host for udata in data.units],
+            ),
+        )
+        http_resource = RESOURCE_TYPES["HTTPRoute"]
+        return http_resource(
+            metadata=ObjectMeta.from_dict(http_route.metadata.model_dump()),
+            # Export without unset and None because None means nil in Kubernetes, which is not what we want.
+            spec=http_route.spec.model_dump(exclude_unset=True, exclude_none=True),
         )
 
     def _sync_all_resources(self):
-
         self._sync_gateway_resources()
 
         self.unit.status = MaintenanceStatus("Validating gateway readiness")
@@ -348,12 +481,24 @@ class IstioIngressCharm(CharmBase):
             except DataValidationError or ApiError:
                 self.unit.status = BlockedStatus("Issue with setting up an ingress")
 
+            # Request a cert refresh in case configuration has changed
+            # The cert handler will only refresh if it detects a meaningful change
+            logger.info(
+                "Requesting CertHandler inspect certs to decide if our CSR has changed and we should re-request"
+            )
+            self.on.refresh_certs.emit()
+
     def _sync_gateway_resources(self):
-        resources_list = []
         krm = self._get_gateway_resource_manager()
 
-        resource_to_append = self._construct_gateway()
-        resources_list.append(resource_to_append)
+        resources_list = []
+        tls_secret_name = None
+        if secret := self._construct_gateway_tls_secret():
+            resources_list.append(secret)
+            if secret.metadata is None:
+                raise ValueError("Unexpected error: secret.metadata is None")
+            tls_secret_name = secret.metadata.name
+        resources_list.append(self._construct_gateway(tls_secret_name=tls_secret_name))
         krm.reconcile(resources_list)
 
         # TODO: Delete below line when we figure out a way to unset hostname on reconcile if set to empty/invalid/unset
@@ -399,6 +544,10 @@ class IstioIngressCharm(CharmBase):
             raise RuntimeError("Ingress can only be provided on the leader unit.")
 
         krm = self._get_ingress_resource_manager()
+
+        # If we can construct a gateway Secret, TLS is enabled so we should configure the routes accordingly
+        is_tls_enabled = self._construct_gateway_tls_secret() is not None
+
         for rel in self.model.relations["ingress"]:
 
             if not self.ingress_per_appv2.is_ready(rel):
@@ -407,10 +556,23 @@ class IstioIngressCharm(CharmBase):
 
             data = self.ingress_per_appv2.get_data(rel)
             prefix = self._generate_prefix(data.app.model_dump(by_alias=True))
-            resource_to_append = self._construct_httproute(data, prefix)
+            resources_to_append = []
+            if is_tls_enabled:
+                # TLS is configured, so we enable HTTPS route and redirect HTTP to HTTPS
+                resources_to_append.append(
+                    self._construct_redirect_to_https_httproute(data, prefix, section_name="http")
+                )
+                resources_to_append.append(
+                    self._construct_httproute(data, prefix, section_name="https")
+                )
+            else:
+                # Else, we enable only an HTTP route
+                resources_to_append.append(
+                    self._construct_httproute(data, prefix, section_name="http")
+                )
 
             if rel.active:
-                current_ingresses.append(resource_to_append)
+                current_ingresses.extend(resources_to_append)
                 external_url = self._generate_external_url(prefix)
                 relation_mappings[rel] = external_url
 
@@ -430,22 +592,41 @@ class IstioIngressCharm(CharmBase):
 
     @property
     def _external_host(self) -> Optional[str]:
-        """Determine the external address for the ingress gateway.
+        """Return the external address for the ingress gateway.
 
-        It will prefer the `external-hostname` config if that is set, otherwise
-        it will look up the load balancer address for the ingress gateway.
+        This will return one of (in order of preference):
+        1. the value cached from a previous call to _external_host, even if this value has since changed
+        2. the `external-hostname` config if that is set
+        3. the load balancer address for the ingress gateway, if it exists and has an IP
+        4. None
 
-        If the gateway isn't available or doesn't have a load balancer address yet,
-        returns None. Only use this directly when external_host is allowed to be None.
+        Preference is given to the previously cached value because this charm may make several calls to this method in
+        a single charm execution and the value of the load balancer address may change during that time.  Without this
+        preference, we could request certs for one hostname and then serve traffic on another.
+
+        Only use this directly when external_host is allowed to be None.
         """
+        if self._external_host_ is not None:
+            return self._external_host_
+
         if external_hostname := self.model.config.get("external_hostname"):
             hostname = cast(str, external_hostname)
             if self._is_valid_hostname(hostname):
-                return hostname
+                self._external_host_ = hostname
+                return self._external_host_
             logger.error("Invalid hostname provided, Please ensure this adheres to RFC 1123")
             return None
 
-        return self._get_lb_external_address
+        if lb_external_address := self._get_lb_external_address:
+            self._external_host_ = lb_external_address
+            return self._external_host_
+
+        logger.debug(
+            "Load balancer address not available.  This is likely a transient issue that will resolve itself, but"
+            " could be because the cluster does not have a load balancer provider.  Defaulting to this charm's fqdn."
+        )
+
+        return None
 
     @staticmethod
     def _generate_prefix(data: Dict[str, Any]) -> str:
@@ -487,6 +668,11 @@ class IstioIngressCharm(CharmBase):
             return False
 
         return True
+
+    @property
+    def _certificate_secret_name(self) -> str:
+        """Return the name of the Kubernetes secret used to hold TLS certificate information."""
+        return f"{self.app.name}-tls-certificate"
 
     @staticmethod
     def format_labels(label_dict: Dict[str, str]) -> str:

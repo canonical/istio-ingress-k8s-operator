@@ -40,7 +40,9 @@ extend-ignore = [
     "D413",
 ]
 ignore = ["E501", "D107"]
-per-file-ignores = {"tests/*" = ["D100","D101","D102","D103","D104","D401"]}
+# ignore N815 in src/models.py because the class variables are defined to match the real kubernetes names.  Otherwise,
+# names like "notHosts" would fail the linting check.
+per-file-ignores = {"tests/*" = ["D100","D101","D102","D103","D104","D401"], "src/models.py" = ["N815"]}
 
 [tool.codespell]
 skip = "build,lib,venv,icon.svg,.tox,.git,.mypy_cache,.ruff_cache,.coverage"

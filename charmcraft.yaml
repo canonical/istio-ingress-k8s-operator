@@ -26,14 +26,20 @@ bases:
       channel: "22.04"
       architectures: ["arm64"]
 
+charm-libs:
+  - lib: "tls_certificates_interface.tls_certificates"
+    version: '3'
+  - lib: "observability-libs.cert_handler"
+    version: '1'
+
 parts:
   charm:
-    plugin: charm
-    build-packages: [git, rustc, cargo]
+    build-packages: [ git ]
     charm-binary-python-packages:
-      # TODO after https://github.com/canonical/istio-ingress-k8s-operator/issues/7 closed: 
-      #      remove rpds-py from this list
-      - "rpds-py"
+      - "pydantic>=2"
+      - "pydantic-core"
+      - "cryptography"
+      - "jsonschema"
 
 containers:
   metrics-proxy:
@@ -59,6 +65,10 @@ config:
         It's also important to note that domain name prefixed with a single wildcard label (e.g. *.example.com) isn't supported for now.
       type: string
 
+peers:
+  peers:
+    interface: istio_k8s_peers
+
 provides:
   ingress:
     interface: ingress
@@ -67,6 +77,12 @@ provides:
   metrics-endpoint:
     interface: prometheus_scrape
 
+requires:
+  certificates:
+    interface: tls-certificates
+    limit: 1
+    description: |
+      Send a CSR to- and obtain a signed certificate from an external CA.
 
 resources:
   metrics-proxy-image:

@@ -1,11 +1,14 @@
 import logging
+import ssl
 from typing import Any, Dict, Optional, cast
+from urllib.parse import urlparse
 
 import lightkube
 import requests
 from lightkube.generic_resource import create_namespaced_resource
 from lightkube.resources.core_v1 import Service
 from pytest_operator.plugin import OpsTest
+from requests.adapters import DEFAULT_POOLBLOCK, DEFAULT_POOLSIZE, DEFAULT_RETRIES, HTTPAdapter
 
 logger = logging.getLogger(__name__)
 
@@ -141,3 +144,109 @@ def send_http_request(url: str, headers: Optional[dict] = None) -> bool:
     """
     resp = requests.get(url=url, headers=headers)
     return resp.status_code == 200
+
+
+def send_http_request_with_custom_ca(
+    url: str, ca_cert: str, resolve_netloc_to_ip: str = None
+) -> int:
+    """Sends a request to the specified URL with an optional CA certificate and DNS resolution.
+
+    :param url: The URL to send the request to.
+    :param ca_cert: Custom CA certificate to use for the request.
+    :param resolve_netloc_to_ip: Optional IP to resolve the url.netloc to.  Useful if we're testing a URL deployed
+                                 without a real host, but that we want the request to appear like it is entering a host
+    :return: The status code of the response.
+    """
+    netloc = urlparse(url).netloc
+    if resolve_netloc_to_ip is None:
+        resolve_netloc_to_ip = netloc
+    headers = {"Host": netloc}
+
+    # Use a custom session to handle the custom SSL context and DNS resolution
+    session = requests.Session()
+    session.mount(
+        "https://", DNSResolverHTTPSAdapter(netloc, resolve_netloc_to_ip, ca_cert=ca_cert)
+    )
+    response = session.get(url=url, headers=headers)
+    return response.status_code
+
+
+class DNSResolverHTTPSAdapter(HTTPAdapter):
+    """A combined DNS resolver and custom CA Certificate adapter for requests.
+
+    This adapter:
+     * resolves hostname to a given IP address
+     * uses a custom CA certificate to validate TLS connections instead of the system CA bundle
+
+    From: https://github.com/canonical/gateway-api-integrator-operator/blob/main/tests/integration/helper.py and
+    https://stackoverflow.com/a/77577017/5394584
+    """
+
+    def __init__(
+        self,
+        hostname,
+        ip,
+        ca_cert: Optional[str] = None,
+    ):
+        """Initialize the dns resolver.
+
+        Args:
+            hostname: DNS entry to resolve.
+            ip: Target IP address.
+            ca_cert: Custom CA certificate to use for the request.
+        """
+        self.hostname = hostname
+        self.ip = ip
+        self.ca_cert = ca_cert
+        super().__init__(
+            pool_connections=DEFAULT_POOLSIZE,
+            pool_maxsize=DEFAULT_POOLSIZE,
+            max_retries=DEFAULT_RETRIES,
+            pool_block=DEFAULT_POOLBLOCK,
+        )
+
+    def init_poolmanager(self, *args, **kwargs):
+        """Initialize the pool manager with the custom CA certificate."""
+        if self.ca_cert:
+            context = ssl.create_default_context(cadata=self.ca_cert)
+        else:
+            context = ssl.create_default_context()
+            context.load_default_certs()
+        kwargs["ssl_context"] = context
+        return super().init_poolmanager(*args, **kwargs)
+
+    # Ignore pylint rule as this is the parent method signature
+    def send(
+        self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None
+    ):  # pylint: disable=too-many-arguments, too-many-positional-arguments
+        """Wrap HTTPAdapter send to modify the outbound request.
+
+        Args:
+            request: Outbound HTTP request.
+            stream: argument used by parent method.
+            timeout: argument used by parent method.
+            verify: argument used by parent method.
+            cert: argument used by parent method.
+            proxies: argument used by parent method.
+
+        Returns:
+            Response: HTTP response after modification.
+        """
+        connection_pool_kwargs = self.poolmanager.connection_pool_kw
+
+        result = urlparse(request.url)
+        if result.hostname == self.hostname:
+            ip = self.ip
+            if result.scheme == "https" and ip:
+                request.url = request.url.replace(
+                    "https://" + result.hostname,
+                    "https://" + ip,
+                )
+                connection_pool_kwargs["server_hostname"] = result.hostname
+                connection_pool_kwargs["assert_hostname"] = result.hostname
+                request.headers["Host"] = result.hostname
+            else:
+                connection_pool_kwargs.pop("server_hostname", None)
+                connection_pool_kwargs.pop("assert_hostname", None)
+
+        return super().send(request, stream, timeout, verify, cert, proxies)
