@@ -21,7 +21,7 @@ from lightkube.resources.apps_v1 import Deployment
 from lightkube.resources.core_v1 import Secret, Service
 from lightkube.types import PatchType
 from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
-from ops import BlockedStatus
+from ops import BlockedStatus, EventBase
 from ops.charm import CharmBase
 from ops.main import main
 from ops.model import ActiveStatus, MaintenanceStatus
@@ -86,11 +86,17 @@ class DisabledCertHandler:
     available: bool = False
 
 
+class RefreshCerts(EventBase):
+    """Event raised when the charm wants the certs to be refreshed."""
+
+
 class IstioIngressCharm(CharmBase):
     """Charm the service."""
 
     def __init__(self, *args):
         super().__init__(*args)
+        # Add a custom event that we can emit to request a cert refresh
+        self.on.define_event("refresh_certs", RefreshCerts)
 
         self._external_host_ = None
 
@@ -123,6 +129,10 @@ class IstioIngressCharm(CharmBase):
                 peer_relation_name="peers",
                 certificates_relation_name="certificates",
                 sans=[external_hostname],
+                # Use a custom event for the charm to signal to the library that we may have changed something
+                # meaningful for the CSR.  CertHandler will only regenerate the CSR and obtain new certs if it detects
+                # a change when handling this event.
+                refresh_events=[self.on.refresh_certs],
             )
             self.framework.observe(
                 self._cert_handler.on.cert_changed, self._on_cert_handler_cert_changed
@@ -427,6 +437,13 @@ class IstioIngressCharm(CharmBase):
                 self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
             except DataValidationError or ApiError:
                 self.unit.status = BlockedStatus("Issue with setting up an ingress")
+
+            # Request a cert refresh in case configuration has changed
+            # The cert handler will only refresh if it detects a meaningful change
+            logger.info(
+                "Requesting CertHandler inspect certs to decide if our CSR has changed and we should re-request"
+            )
+            self.on.refresh_certs.emit()
 
     def _sync_gateway_resources(self):
         krm = self._get_gateway_resource_manager()

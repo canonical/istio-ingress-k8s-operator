@@ -32,6 +32,7 @@ container.push(certpath, self.cert_handler.server_cert)
 Since this library uses [Juju Secrets](https://juju.is/docs/juju/secret) it requires Juju >= 3.0.3.
 """
 import abc
+import hashlib
 import ipaddress
 import json
 import socket
@@ -65,6 +66,8 @@ from ops.model import Relation, Secret, SecretNotFoundError
 
 logger = logging.getLogger(__name__)
 
+# TODO: This is a custom version of the library created to patch a bug.  It should be pushed back to the central repo,
+#  versioned, then reimported here.
 LIBID = "b5cd5cd580f3428fa5f59a8876dcbe6a"
 LIBAPI = 1
 LIBPATCH = 13
@@ -440,18 +443,17 @@ class CertHandler(Object):
         return True
 
     @property
-    def _csr_hash(self) -> int:
+    def _csr_hash(self) -> str:
         """A hash of the config that constructs the CSR.
 
         Only include here the config options that, should they change, should trigger a renewal of
         the CSR.
+
+        TODO: This is a custom _csr_hash implementation that fixes a bug where the old hash was session dependent.
+         It should be pushed to the library and then we should import the new version.
         """
-        return hash(
-            (
-                tuple(self.sans_dns),
-                tuple(self.sans_ip),
-            )
-        )
+        immutable_config = (str(self.sans_dns) + str(self.sans_ip)).encode("utf-8")
+        return hashlib.sha256(immutable_config).hexdigest()
 
     @property
     def available(self) -> bool:
