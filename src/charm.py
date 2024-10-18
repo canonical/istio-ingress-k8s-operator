@@ -10,6 +10,7 @@ import re
 import time
 from typing import Any, Dict, Optional, cast
 
+from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.observability_libs.v1.cert_handler import CertHandler
 from charms.traefik_k8s.v2.ingress import IngressPerAppProvider as IPAv2
 from charms.traefik_k8s.v2.ingress import IngressRequirerData
@@ -25,6 +26,7 @@ from ops import BlockedStatus, EventBase
 from ops.charm import CharmBase
 from ops.main import main
 from ops.model import ActiveStatus, MaintenanceStatus
+from ops.pebble import ChangeError, Layer
 
 # from lightkube.models.meta_v1 import Patch
 from models import (
@@ -107,7 +109,14 @@ class IstioIngressCharm(CharmBase):
         self._lightkube_client = None
 
         self.ingress_per_appv2 = IPAv2(charm=self)
-
+        self.telemetry_labels = {
+            f"charms.canonical.com/{self.model.name}.{self.app.name}.telemetry": "aggregated"
+        }
+        # Configure Observability
+        self._scraping = MetricsEndpointProvider(
+            self,
+            jobs=[{"static_configs": [{"targets": ["*:15090"]}]}],
+        )
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.remove, self._on_remove)
         self.framework.observe(
@@ -115,6 +124,9 @@ class IstioIngressCharm(CharmBase):
         )
         self.framework.observe(
             self.ingress_per_appv2.on.data_removed, self._on_ingress_data_removed
+        )
+        self.framework.observe(
+            self.on.metrics_proxy_pebble_ready, self._metrics_proxy_pebble_ready
         )
 
         # During the initialisation of the charm, we do not have a LoadBalancer and thus a LoadBalancer external IP.
@@ -149,6 +161,33 @@ class IstioIngressCharm(CharmBase):
             )
         return self._lightkube_client
 
+    def _setup_proxy_pebble_service(self):
+        """Define and start the metrics broadcast proxy Pebble service."""
+        proxy_container = self.unit.get_container("metrics-proxy")
+        if not proxy_container.can_connect():
+            return
+        proxy_layer = Layer(
+            {
+                "summary": "Metrics Broadcast Proxy Layer",
+                "description": "Pebble layer for the metrics broadcast proxy",
+                "services": {
+                    "metrics-proxy": {
+                        "override": "replace",
+                        "summary": "Metrics Broadcast Proxy",
+                        "command": f"metrics-proxy --labels {self.format_labels(self.telemetry_labels)}",
+                        "startup": "enabled",
+                    }
+                },
+            }
+        )
+
+        proxy_container.add_layer("metrics-proxy", proxy_layer, combine=True)
+
+        try:
+            proxy_container.replan()
+        except ChangeError as e:
+            logger.error(f"Error while replanning proxy container: {e}")
+
     def _get_gateway_resource_manager(self):
         return KubernetesResourceManager(
             labels=create_charm_default_labels(
@@ -175,6 +214,10 @@ class IstioIngressCharm(CharmBase):
 
     def _on_config_changed(self, _):
         """Event handler for config changed."""
+        self._sync_all_resources()
+
+    def _metrics_proxy_pebble_ready(self, _):
+        """Event handler for metrics_proxy_pebble_ready."""
         self._sync_all_resources()
 
     def _on_remove(self, _):
@@ -320,6 +363,7 @@ class IstioIngressCharm(CharmBase):
             metadata=Metadata(
                 name=self.app.name,
                 namespace=self.model.name,
+                labels={**self.telemetry_labels},
             ),
             spec=IstioGatewaySpec(
                 gatewayClassName="istio",
@@ -432,6 +476,7 @@ class IstioIngressCharm(CharmBase):
                 return
             try:
                 self._sync_ingress_resources()
+                self._setup_proxy_pebble_service()
                 self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
             except DataValidationError or ApiError:
                 self.unit.status = BlockedStatus("Issue with setting up an ingress")
@@ -628,6 +673,11 @@ class IstioIngressCharm(CharmBase):
     def _certificate_secret_name(self) -> str:
         """Return the name of the Kubernetes secret used to hold TLS certificate information."""
         return f"{self.app.name}-tls-certificate"
+
+    @staticmethod
+    def format_labels(label_dict: Dict[str, str]) -> str:
+        """Format a dictionary into a comma-separated string of key=value pairs."""
+        return ",".join(f"{key}={value}" for key, value in label_dict.items())
 
 
 if __name__ == "__main__":

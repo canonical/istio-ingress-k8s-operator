@@ -18,3 +18,5 @@ jsonschema >= 4.22.0
 # Docs: https://cryptography.io/en/latest/
 # Deps: tls_certificates_interface libs
 cryptography >= 42.0.0
+
+cosl
