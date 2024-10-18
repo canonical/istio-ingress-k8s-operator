@@ -33,6 +33,7 @@ resources = {
     "metrics-proxy-image": METADATA["resources"]["metrics-proxy-image"]["upstream-source"],
 }
 
+
 @dataclass
 class CharmDeploymentConfiguration:
     entity_url: str  # aka charm name or local path to charm

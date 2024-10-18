@@ -10,8 +10,8 @@ import re
 import time
 from typing import Any, Dict, Optional, cast
 
-from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.observability_libs.v1.cert_handler import CertHandler
+from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.traefik_k8s.v2.ingress import IngressPerAppProvider as IPAv2
 from charms.traefik_k8s.v2.ingress import IngressRequirerData
 from lightkube.core.client import Client
