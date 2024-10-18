@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 import pytest
+import requests
 import yaml
 from conftest import (
     get_relation_data,
@@ -18,13 +19,16 @@ from helpers import (
     get_listener_spec,
     get_route_condition,
     send_http_request,
+    send_http_request_with_custom_ca,
 )
+from juju.unit import Unit
 from pytest_operator.plugin import OpsTest
 
 logger = logging.getLogger(__name__)
 
 METADATA = yaml.safe_load(Path("./charmcraft.yaml").read_text())
 APP_NAME = METADATA["name"]
+IPA_TESTER = "ipa-tester"
 
 
 @dataclass
@@ -67,12 +71,12 @@ async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
     # Deploy ipa-tester
     await ops_test.model.deploy(
         ipa_tester_charm,
-        application_name="ipa-tester",
+        application_name=IPA_TESTER,
         resources={"echo-server-image": "jmalloc/echo-server:v0.3.7"},
     ),
     await ops_test.model.wait_for_idle(
         [
-            "ipa-tester",
+            IPA_TESTER,
         ],
         status="active",
         timeout=1000,
@@ -88,7 +92,7 @@ async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
 @pytest.mark.abort_on_fail
 async def test_relate(ops_test: OpsTest):
     await ops_test.model.add_relation("ipa-tester:ingress", "istio-ingress-k8s:ingress")
-    await ops_test.model.wait_for_idle([APP_NAME, "ipa-tester"])
+    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER])
 
 
 @pytest.mark.abort_on_fail
@@ -115,8 +119,8 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
     "external_hostname, expected_hostname",
     [
         ("foo.bar", "foo.bar"),  # Initial valid hostname
-        ("", None),  # Remove hostname
         ("bar.foo", "bar.foo"),  # Change to a new valid hostname
+        ("", None),  # Remove hostname
     ],
 )
 async def test_route_validity(
@@ -125,15 +129,15 @@ async def test_route_validity(
     await ops_test.model.applications[APP_NAME].set_config(
         {"external_hostname": external_hostname}
     )
-    await ops_test.model.wait_for_idle([APP_NAME, "ipa-tester"])
+    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER])
 
     model = ops_test.model.name
 
     istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
-    tester_url = f"http://{istio_ingress_address}/{model}-ipa-tester"
+    tester_url = f"http://{istio_ingress_address}/{model}-{IPA_TESTER}"
 
     listener_condition = await get_listener_condition(ops_test, "istio-ingress-k8s")
-    route_condition = await get_route_condition(ops_test, "ipa-tester")
+    route_condition = await get_route_condition(ops_test, f"{IPA_TESTER}-http")
     listener_spec = await get_listener_spec(ops_test, "istio-ingress-k8s")
 
     assert listener_condition["attachedRoutes"] == 1
@@ -154,7 +158,95 @@ async def test_route_validity(
         assert not send_http_request(tester_url, {"Host": "random.hostname"})
 
 
+@pytest.fixture(scope="module")
+async def deploy_and_relate_certificate_provider(ops_test: OpsTest):
+    """Deploy the self-signed-certificates charm to the primary model and relate it to istio-ingress-k8s.
+
+    Returns the certificate provider's application name.
+
+    Note that this fixture does not wait_for_idle.  The caller should do that if needed."""
+    # Deploy and relate to a certificate provider
+    self_signed_certificates = "self-signed-certificates"
+    await ops_test.model.deploy(self_signed_certificates)
+    await ops_test.model.add_relation(
+        f"{self_signed_certificates}:certificates", f"{APP_NAME}:certificates"
+    )
+    yield self_signed_certificates
+    # TODO: Should we remove this application after yield?  As is, we leave the test with TLS enabled.  Given that its
+    #  module scope, removing it here might not actually fire till the end of the test suite anyway.  Not sure.
+
+
+@pytest.mark.abort_on_fail
+@pytest.mark.parametrize(
+    "external_hostname",
+    [
+        "",  # Use default (empty) hostname
+        # Change to a new valid hostname.  This will reuse the existing relation to the cert provider, so it tests both
+        # whether we can handle different hostnames and whether we can change the hostname while TLS is provided
+        "foo.bar",
+    ],
+)
+@pytest.mark.abort_on_fail
+async def test_gateway_with_tls(external_hostname, ops_test: OpsTest, deploy_and_relate_certificate_provider):
+    """Test that, when connected to a TLS cert provider, the gateway is configured with TLS and http is redirected."""
+    self_signed_certificates = deploy_and_relate_certificate_provider
+
+    await ops_test.model.applications[APP_NAME].set_config(
+        {"external_hostname": external_hostname}
+    )
+
+    # Wait for everything to settle before obtaining the ca_certificate
+    await ops_test.model.wait_for_idle(
+        [APP_NAME, IPA_TESTER, self_signed_certificates], status="active", timeout=1000
+    )
+    ca_certificate = await get_ca_certificate(
+        ops_test.model.units[f"{self_signed_certificates}/0"]
+    )
+
+    # Build the ingress URL
+    model = ops_test.model.name
+    istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
+    tester_url = f"{istio_ingress_address}/{model}-{IPA_TESTER}"
+    tester_url_http = f"http://{tester_url}"
+
+    # If the ingress is configured to use a hostname, set the Host header
+    headers = {}
+    hostname = (await ops_test.model.applications[APP_NAME].get_config())["external_hostname"].get(
+        "value", None
+    )
+    if hostname:
+        headers["Host"] = hostname
+
+    # Assert that http request is redirected to https
+    resp = requests.get(url=tester_url_http, headers=headers, allow_redirects=False)
+    assert resp.status_code == 301, "http request was not redirected to https"
+    assert resp.headers.get("Location").startswith(
+        "https://"
+    ), "http request was not redirected to https"
+
+    # Assert that https request works with the given ca-bundle
+    if hostname:
+        url = f"https://{hostname}/{model}-{IPA_TESTER}"
+        resolve_netloc_to_ip = istio_ingress_address
+    else:
+        url = f"https://{istio_ingress_address}/{model}-{IPA_TESTER}"
+        resolve_netloc_to_ip = None
+    assert (
+        send_http_request_with_custom_ca(
+            url, ca_certificate, resolve_netloc_to_ip=resolve_netloc_to_ip
+        )
+        == 200
+    ), "Failed to send request to endpoint with custom CA"
+
+
+async def get_ca_certificate(unit: Unit) -> str:
+    """Return the CA certificate from a self-signed-certificate unit using the get-ca-certificate action."""
+    action = await unit.run_action("get-ca-certificate")
+    result = await action.wait()
+    return result.results["ca-certificate"]
+
+
 @pytest.mark.abort_on_fail
 async def test_remove_relation(ops_test: OpsTest):
     await ops_test.juju("remove-relation", "ipa-tester:ingress", "istio-ingress-k8s:ingress")
-    await ops_test.model.wait_for_idle([APP_NAME, "ipa-tester"], status="active")
+    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER], status="active")
