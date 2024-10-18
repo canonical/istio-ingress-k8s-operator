@@ -164,7 +164,8 @@ async def deploy_and_relate_certificate_provider(ops_test: OpsTest):
 
     Returns the certificate provider's application name.
 
-    Note that this fixture does not wait_for_idle.  The caller should do that if needed."""
+    Note that this fixture does not wait_for_idle.  The caller should do that if needed.
+    """
     # Deploy and relate to a certificate provider
     self_signed_certificates = "self-signed-certificates"
     await ops_test.model.deploy(self_signed_certificates)
@@ -187,7 +188,9 @@ async def deploy_and_relate_certificate_provider(ops_test: OpsTest):
     ],
 )
 @pytest.mark.abort_on_fail
-async def test_gateway_with_tls(external_hostname, ops_test: OpsTest, deploy_and_relate_certificate_provider):
+async def test_gateway_with_tls(
+    external_hostname, ops_test: OpsTest, deploy_and_relate_certificate_provider
+):
     """Test that, when connected to a TLS cert provider, the gateway is configured with TLS and http is redirected."""
     self_signed_certificates = deploy_and_relate_certificate_provider
 

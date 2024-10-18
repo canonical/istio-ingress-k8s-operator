@@ -84,6 +84,8 @@ class DisabledCertHandler:
     """A mock CertHandler class that mimics being unavailable."""
 
     available: bool = False
+    server_cert = None
+    private_key = None
 
 
 class RefreshCerts(EventBase):
@@ -289,18 +291,14 @@ class IstioIngressCharm(CharmBase):
                                    gateway will be configured to use TLS with this secret for the certificates.
         """
         allowed_routes = AllowedRoutes(namespaces={"from": "All"})
-        hostname_config = (
-            {"hostname": self._external_host}
-            if self._is_valid_hostname(self._external_host)
-            else {}
-        )
+        hostname = self._external_host if self._is_valid_hostname(self._external_host) else None
         listeners = [
             Listener(
                 name="http",
                 port=80,
                 protocol="HTTP",
                 allowedRoutes=allowed_routes,
-                **hostname_config,
+                hostname=hostname,
             )
         ]
 
@@ -314,7 +312,7 @@ class IstioIngressCharm(CharmBase):
                     tls=GatewayTLSConfig(
                         certificateRefs=[SecretObjectReference(name=tls_secret_name)]
                     ),
-                    **hostname_config,
+                    hostname=hostname,
                 )
             )
 
@@ -452,6 +450,8 @@ class IstioIngressCharm(CharmBase):
         tls_secret_name = None
         if secret := self._construct_gateway_tls_secret():
             resources_list.append(secret)
+            if secret.metadata is None:
+                raise ValueError("Unexpected error: secret.metadata is None")
             tls_secret_name = secret.metadata.name
         resources_list.append(self._construct_gateway(tls_secret_name=tls_secret_name))
         krm.reconcile(resources_list)

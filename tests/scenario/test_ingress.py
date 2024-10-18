@@ -70,7 +70,7 @@ def test_construct_redirect_to_https_httproute(
         assert len(httproute.spec["parentRefs"]) == 1
         assert httproute.spec["parentRefs"][0]["sectionName"] == section_name
         assert len(httproute.spec["rules"]) == 1
-        assert len(httproute.spec["rules"][0]["backendRefs"]) == 0
+        assert len(httproute.spec["rules"][0].get("backendRefs", [])) == 0
         assert len(httproute.spec["rules"][0]["filters"]) == 1
         assert httproute.spec["rules"][0]["filters"][0]["type"] == "RequestRedirect"
 
