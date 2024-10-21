@@ -7,6 +7,7 @@ import pytest
 import scenario
 
 from charm import IstioIngressCharm
+from models import HTTPRouteFilterType
 from tests.scenario.test_gateway import generate_certificates_relation
 
 
@@ -18,6 +19,47 @@ def mock_ingress_requirer_data():
     mock_ingress_requirer_data.app.port = 80
     mock_ingress_requirer_data.app.strip_prefix = True
     return mock_ingress_requirer_data
+
+
+@pytest.mark.parametrize(
+    "strip_prefix, filters",
+    [
+        # If strip_prefix == True, we should have a URLRewrite filter with ReplacePrefixMatch of "/"
+        (
+            True,
+            [
+                {
+                    "type": HTTPRouteFilterType.URLRewrite,
+                    "urlRewrite": {
+                        "path": {"type": "ReplacePrefixMatch", "replacePrefixMatch": "/"}
+                    },
+                }
+            ],
+        ),
+        (False, []),
+    ],
+)
+def test_construct_httproute_with_strip_prefix(
+    strip_prefix, filters, istio_ingress_charm, istio_ingress_context, mock_ingress_requirer_data
+):
+    """Test that the _construct_httproute method constructs an HTTPRoute object correctly."""
+    prefix = "prefix"
+    section_name = "section"
+
+    mock_ingress_requirer_data.app.strip_prefix = strip_prefix
+
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        httproute = charm._construct_httproute(
+            data=mock_ingress_requirer_data,
+            prefix=prefix,
+            section_name=section_name,
+        )
+
+        assert httproute.spec["rules"][0]["filters"] == filters
 
 
 def test_construct_httproute(
@@ -75,7 +117,9 @@ def test_construct_redirect_to_https_httproute(
         assert httproute.spec["rules"][0]["filters"][0]["type"] == "RequestRedirect"
 
 
-def generate_ingress_relation_data(name, model, port=80, ip="1.2.3.4", host=None):
+def generate_ingress_relation_data(
+    name, model, port=80, ip="1.2.3.4", host=None, strip_prefix=False
+):
     if host is None:
         host = f"{name}.example.com"
     return scenario.Relation(
@@ -86,6 +130,7 @@ def generate_ingress_relation_data(name, model, port=80, ip="1.2.3.4", host=None
             "name": json.dumps(name),
             "model": json.dumps(model),
             "port": json.dumps(port),
+            "strip-prefix": json.dumps(strip_prefix),
         },
         remote_units_data={
             0: {
