@@ -40,7 +40,8 @@ parts:
       - "pydantic-core"
       - "cryptography"
       - "jsonschema"
-
+      - "opentelemetry-exporter-otlp-proto-http==1.21.0"
+      
 containers:
   metrics-proxy:
     resource: metrics-proxy-image
@@ -83,6 +84,11 @@ requires:
     limit: 1
     description: |
       Send a CSR to- and obtain a signed certificate from an external CA.
+  charm-tracing:
+    interface: tracing
+    limit: 1
+    description: |
+      Enables sending charm traces to a distributed tracing backend such as Tempo.
 
 resources:
   metrics-proxy-image:

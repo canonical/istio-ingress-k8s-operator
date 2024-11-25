@@ -12,6 +12,8 @@ from typing import Any, Dict, Optional, cast
 
 from charms.observability_libs.v1.cert_handler import CertHandler
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
+from charms.tempo_coordinator_k8s.v0.charm_tracing import trace_charm
+from charms.tempo_coordinator_k8s.v0.tracing import TracingEndpointRequirer
 from charms.traefik_k8s.v2.ingress import IngressPerAppProvider as IPAv2
 from charms.traefik_k8s.v2.ingress import IngressRequirerData
 from lightkube.core.client import Client
@@ -94,6 +96,14 @@ class RefreshCerts(EventBase):
     """Event raised when the charm wants the certs to be refreshed."""
 
 
+@trace_charm(
+    tracing_endpoint="_charm_tracing_endpoint",
+    extra_types=[
+        MetricsEndpointProvider,
+    ],
+    # we don't add a cert because istio does TLS his way
+    # TODO: fix when https://github.com/canonical/istio-beacon-k8s-operator/issues/33 is closed
+)
 class IstioIngressCharm(CharmBase):
     """Charm the service."""
 
@@ -117,6 +127,13 @@ class IstioIngressCharm(CharmBase):
             self,
             jobs=[{"static_configs": [{"targets": ["*:15090"]}]}],
         )
+        self.charm_tracing = TracingEndpointRequirer(
+            self, relation_name="charm-tracing", protocols=["otlp_http"]
+        )
+        self._charm_tracing_endpoint = (
+            self.charm_tracing.get_endpoint("otlp_http") if self.charm_tracing.relations else None
+        )
+
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.remove, self._on_remove)
         self.framework.observe(
@@ -128,7 +145,6 @@ class IstioIngressCharm(CharmBase):
         self.framework.observe(
             self.on.metrics_proxy_pebble_ready, self._metrics_proxy_pebble_ready
         )
-
         # During the initialisation of the charm, we do not have a LoadBalancer and thus a LoadBalancer external IP.
         # If we need that IP to request the certs, disable cert handling until we have it.
         if (external_hostname := self._external_host) is None:
