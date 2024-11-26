@@ -604,7 +604,8 @@ class IstioIngressCharm(CharmBase):
 
     def _generate_external_url(self, prefix: str) -> str:
         """Generate external URL for the ingress."""
-        return f"http://{self._external_host}{prefix}"
+        scheme = "https" if self._construct_gateway_tls_secret() is not None else "http"
+        return f"{scheme}://{self._external_host}{prefix}"
 
     @property
     def _external_host(self) -> Optional[str]:
