@@ -20,6 +20,12 @@ RESOURCE_TYPES = {
     "HTTPRoute": create_namespaced_resource(
         "gateway.networking.k8s.io", "v1", "HTTPRoute", "httproutes"
     ),
+    "AuthorizationPolicy": create_namespaced_resource(
+        "security.istio.io",
+        "v1",
+        "AuthorizationPolicy",
+        "authorizationpolicies",
+    ),
 }
 
 
