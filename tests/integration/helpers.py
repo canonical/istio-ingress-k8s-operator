@@ -107,6 +107,29 @@ async def get_route_spec(ops_test: OpsTest, route_name: str) -> Optional[Dict[st
         return None
 
 
+async def get_auth_policy_spec(ops_test: OpsTest, policy_name: str) -> Optional[Dict[str, Any]]:
+    """Retrieve and check the spec of the AuthorizationPolicy resource.
+
+    Args:
+        ops_test: pytest-operator plugin
+        policy_name: Name of the AuthorizationPolicy resource.
+
+    Returns:
+        A dictionary representing the spec of the policy, or None if not found.
+    """
+    model = ops_test.model.info
+    try:
+        c = lightkube.Client()
+        policy = c.get(
+            RESOURCE_TYPES["AuthorizationPolicy"], namespace=model.name, name=policy_name
+        )
+        return policy.spec
+
+    except Exception as e:
+        logger.error("Error retrieving AuthorizationPolicy condition: %s", e, exc_info=1)
+        return None
+
+
 async def get_route_condition(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve and check the condition from the HTTPRoute resource.
 

@@ -178,15 +178,6 @@ class Action(str, Enum):
     allow = "ALLOW"
 
 
-class PolicyTargetReference(BaseModel):
-    """PolicyTargetReference defines the target of the policy."""
-
-    group: str
-    kind: str
-    name: str
-    namespace: Optional[str] = None
-
-
 class WorkloadSelector(BaseModel):
     """WorkloadSelector defines the selector for the policy."""
 
@@ -232,8 +223,6 @@ class AuthorizationPolicySpec(BaseModel):
     """AuthorizationPolicySpec defines the spec of an Istio AuthorizationPolicy Kubernetes resource."""
 
     action: Action = Action.allow
-    # TODO: Do we need L7 ingress policies?
-    # targetRefs: List[PolicyTargetReference]
     rules: List[AuthRule]
     selector: WorkloadSelector
 
