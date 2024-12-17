@@ -6,7 +6,7 @@
 from enum import Enum
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 # Global metadata schema
@@ -166,3 +166,80 @@ class HTTPRouteResource(BaseModel):
 
     metadata: Metadata
     spec: HTTPRouteResourceSpec
+
+
+# Authrization Policy schema
+# Below is stripped down to cater for only L4 needed policies for ingress
+
+
+class Action(str, Enum):
+    """Action is a type that represents the action to take when a rule matches."""
+
+    allow = "ALLOW"
+
+
+class PolicyTargetReference(BaseModel):
+    """PolicyTargetReference defines the target of the policy."""
+
+    group: str
+    kind: str
+    name: str
+    namespace: Optional[str] = None
+
+
+class WorkloadSelector(BaseModel):
+    """WorkloadSelector defines the selector for the policy."""
+
+    matchLabels: Dict[str, str]
+
+
+class Source(BaseModel):
+    """Source defines the source of the policy."""
+
+    principals: Optional[List[str]] = None
+
+
+class From(BaseModel):
+    """From defines the source of the policy."""
+
+    source: Source
+
+
+class Operation(BaseModel):
+    """Operation defines the operation of the To model."""
+
+    ports: Optional[List[str]] = None
+    paths: Optional[List[str]] = None
+
+
+class To(BaseModel):
+    """To defines the destination of the policy."""
+
+    operation: Optional[Operation] = None
+
+
+class AuthRule(BaseModel):
+    """AuthRule defines a policy rule."""
+
+    from_: Optional[List[From]] = Field(default=None, alias="from")
+    to: Optional[List[To]] = None
+    # Allows us to populate with `Rule(from_=[From()])`.  Without this, we can only use they alias `from`, which is
+    # protected, meaning we could only build rules from a dict like `Rule(**{"from": [From()]})`.
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class AuthorizationPolicySpec(BaseModel):
+    """AuthorizationPolicySpec defines the spec of an Istio AuthorizationPolicy Kubernetes resource."""
+
+    action: Action = Action.allow
+    # TODO: Do we need L7 ingress policies?
+    # targetRefs: List[PolicyTargetReference]
+    rules: List[AuthRule]
+    selector: WorkloadSelector
+
+
+class AuthorizationPolicyResource(BaseModel):
+    """AuthorizationPolicyResource defines the structure of an Istio AuthorizationPolicy Kubernetes resource."""
+
+    metadata: Metadata
+    spec: AuthorizationPolicySpec

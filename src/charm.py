@@ -24,16 +24,19 @@ from lightkube.resources.apps_v1 import Deployment
 from lightkube.resources.core_v1 import Secret, Service
 from lightkube.types import PatchType
 from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
-from ops import BlockedStatus, EventBase
+from ops import BlockedStatus, EventBase, main
 from ops.charm import CharmBase
-from ops.main import main
 from ops.model import ActiveStatus, MaintenanceStatus
 from ops.pebble import ChangeError, Layer
 
 # from lightkube.models.meta_v1 import Patch
 from models import (
     AllowedRoutes,
+    AuthorizationPolicyResource,
+    AuthorizationPolicySpec,
+    AuthRule,
     BackendRef,
+    From,
     GatewayTLSConfig,
     HTTPRequestRedirectFilter,
     HTTPRouteFilter,
@@ -46,10 +49,14 @@ from models import (
     Listener,
     Match,
     Metadata,
+    Operation,
     ParentRef,
     PathMatch,
     Rule,
     SecretObjectReference,
+    Source,
+    To,
+    WorkloadSelector,
 )
 
 logger = logging.getLogger(__name__)
@@ -68,6 +75,12 @@ RESOURCE_TYPES = {
     "ReferenceGrant": create_namespaced_resource(
         "gateway.networking.k8s.io", "v1beta1", "ReferenceGrant", "referencegrants"
     ),
+    "AuthorizationPolicy": create_namespaced_resource(
+        "security.istio.io",
+        "v1",
+        "AuthorizationPolicy",
+        "authorizationpolicies",
+    ),
 }
 
 GATEWAY_RESOURCE_TYPES = {RESOURCE_TYPES["Gateway"], Secret}
@@ -76,8 +89,10 @@ INGRESS_RESOURCE_TYPES = {
     RESOURCE_TYPES["ReferenceGrant"],
     RESOURCE_TYPES["HTTPRoute"],
 }
+AUTHORIZATION_POLICY_RESOURCE_TYPES = {RESOURCE_TYPES["AuthorizationPolicy"]}
 GATEWAY_LABEL = "istio-gateway"
 INGRESS_LABEL = "istio-ingress"
+AUTHORIZATION_POLICY_LABEL = "istio-ingress-authorization-policy"
 
 
 class DataValidationError(RuntimeError):
@@ -224,6 +239,16 @@ class IstioIngressCharm(CharmBase):
             logger=logger,
         )
 
+    def _get_authorization_policy_resource_manager(self):
+        return KubernetesResourceManager(
+            labels=create_charm_default_labels(
+                self.app.name, self.model.name, scope=AUTHORIZATION_POLICY_LABEL
+            ),
+            resource_types=AUTHORIZATION_POLICY_RESOURCE_TYPES,  # pyright: ignore
+            lightkube_client=self.lightkube_client,
+            logger=logger,
+        )
+
     def _on_cert_handler_cert_changed(self, _):
         """Event handler for when tls certificates have changed."""
         self._sync_all_resources()
@@ -239,11 +264,14 @@ class IstioIngressCharm(CharmBase):
     def _on_remove(self, _):
         """Event handler for remove."""
         # Removing tailing ingresses
-        krm = self._get_ingress_resource_manager()
-        krm.delete()
+        kim = self._get_ingress_resource_manager()
+        kim.delete()
 
-        krm = self._get_gateway_resource_manager()
-        krm.delete()
+        kgm = self._get_gateway_resource_manager()
+        kgm.delete()
+
+        kam = self._get_authorization_policy_resource_manager()
+        kam.delete()
 
     def _on_ingress_data_provided(self, _):
         """Handle a unit providing data requesting IPU."""
@@ -439,6 +467,42 @@ class IstioIngressCharm(CharmBase):
             spec=http_route.spec.model_dump(exclude_none=True),
         )
 
+    def _construct_ingress_auth_policy(self, data: IngressRequirerData):
+
+        auth_policy = AuthorizationPolicyResource(
+            metadata=Metadata(
+                name=data.app.name + "-" + self.app.name + "-l4-policy",
+                namespace=data.app.model,
+            ),
+            spec=AuthorizationPolicySpec(
+                rules=[
+                    AuthRule(
+                        to=[To(operation=Operation(ports=[str(data.app.port)]))],
+                        from_=[  # type: ignore # this is accessible via an alias
+                            From(
+                                source=Source(
+                                    principals=[
+                                        _get_peer_identity_for_juju_application(
+                                            self.managed_name, self.model.name
+                                        )
+                                    ]
+                                )
+                            )
+                        ],
+                    )
+                ],
+                selector=WorkloadSelector(matchLabels={"app.kubernetes.io/name": data.app.name}),
+            ),
+        )
+        auth_resource = RESOURCE_TYPES["AuthorizationPolicy"]
+        return auth_resource(
+            metadata=ObjectMeta.from_dict(auth_policy.metadata.model_dump()),
+            # by_alias=True because the model includes an alias for the `from` field
+            # exclude_unset=True because unset fields will be treated as their default values in Kubernetes
+            # exclude_none=True because null values in this data always mean the Kubernetes default
+            spec=auth_policy.spec.model_dump(by_alias=True, exclude_unset=True, exclude_none=True),
+        )
+
     def _construct_redirect_to_https_httproute(
         self, data: IngressRequirerData, prefix: str, section_name: str
     ):
@@ -555,11 +619,13 @@ class IstioIngressCharm(CharmBase):
 
     def _sync_ingress_resources(self):
         current_ingresses = []
+        current_policies = []
         relation_mappings = {}
         if not self.unit.is_leader():
             raise RuntimeError("Ingress can only be provided on the leader unit.")
 
         krm = self._get_ingress_resource_manager()
+        kam = self._get_authorization_policy_resource_manager()
 
         # If we can construct a gateway Secret, TLS is enabled so we should configure the routes accordingly
         is_tls_enabled = self._construct_gateway_tls_secret() is not None
@@ -572,28 +638,33 @@ class IstioIngressCharm(CharmBase):
 
             data = self.ingress_per_appv2.get_data(rel)
             prefix = self._generate_prefix(data.app.model_dump(by_alias=True))
-            resources_to_append = []
+            ingress_resources_to_append = []
+            ingress_policies_to_append = []
             if is_tls_enabled:
                 # TLS is configured, so we enable HTTPS route and redirect HTTP to HTTPS
-                resources_to_append.append(
+                ingress_resources_to_append.append(
                     self._construct_redirect_to_https_httproute(data, prefix, section_name="http")
                 )
-                resources_to_append.append(
+                ingress_resources_to_append.append(
                     self._construct_httproute(data, prefix, section_name="https")
                 )
             else:
                 # Else, we enable only an HTTP route
-                resources_to_append.append(
+                ingress_resources_to_append.append(
                     self._construct_httproute(data, prefix, section_name="http")
                 )
 
+            ingress_policies_to_append.append(self._construct_ingress_auth_policy(data))
+
             if rel.active:
-                current_ingresses.extend(resources_to_append)
+                current_ingresses.extend(ingress_resources_to_append)
+                current_policies.extend(ingress_policies_to_append)
                 external_url = self._generate_external_url(prefix)
                 relation_mappings[rel] = external_url
 
         try:
             krm.reconcile(current_ingresses)
+            kam.reconcile(current_policies)
             for relation, url in relation_mappings.items():
                 self.ingress_per_appv2.wipe_ingress_data(relation)
                 logger.debug(f"Publishing external URL for {relation.app.name}: {url}")
@@ -695,6 +766,18 @@ class IstioIngressCharm(CharmBase):
     def format_labels(label_dict: Dict[str, str]) -> str:
         """Format a dictionary into a comma-separated string of key=value pairs."""
         return ",".join(f"{key}={value}" for key, value in label_dict.items())
+
+
+def _get_peer_identity_for_juju_application(app_name, namespace):
+    """Return a Juju application's peer identity.
+
+    Format returned is defined by `principals` in
+    [this reference](https://istio.io/latest/docs/reference/config/security/authorization-policy/#Source):
+
+    This function relies on the Juju convention that each application gets a ServiceAccount of the same name in the same
+    namespace.
+    """
+    return f"cluster.local/ns/{namespace}/sa/{app_name}"
 
 
 if __name__ == "__main__":
