@@ -104,7 +104,7 @@ def test_construct_ingress_auth_policy(
         )
 
         # Verify the AuthorizationPolicy resource
-        assert auth_policy.metadata.name == "app-name-{}-l4-policy".format(charm.app.name)
+        assert auth_policy.metadata.name == f"app-name-{charm.app.name}-app-namespace-l4"
         assert auth_policy.metadata.namespace == "app-namespace"
 
         # Check spec rules

@@ -122,7 +122,7 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
 
 @pytest.mark.abort_on_fail
 async def test_auth_policy_validity(ops_test: OpsTest):
-    policy_name = "ipa-tester-k8s-istio-ingress-k8s-l4-policy"
+    policy_name = f"{IPA_TESTER}-{APP_NAME}-{ops_test.model_full_name}-l4"
 
     # Retrieve the AuthorizationPolicy spec
     policy_spec = await get_auth_policy_spec(ops_test, policy_name)

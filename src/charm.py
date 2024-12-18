@@ -90,9 +90,9 @@ INGRESS_RESOURCE_TYPES = {
     RESOURCE_TYPES["HTTPRoute"],
 }
 AUTHORIZATION_POLICY_RESOURCE_TYPES = {RESOURCE_TYPES["AuthorizationPolicy"]}
-GATEWAY_LABEL = "istio-gateway"
-INGRESS_LABEL = "istio-ingress"
-AUTHORIZATION_POLICY_LABEL = "istio-ingress-authorization-policy"
+GATEWAY_SCOPE = "istio-gateway"
+INGRESS_SCOPE = "istio-ingress"
+AUTHORIZATION_POLICY_SCOPE = "istio-ingress-authorization-policy"
 
 
 class DataValidationError(RuntimeError):
@@ -222,7 +222,7 @@ class IstioIngressCharm(CharmBase):
     def _get_gateway_resource_manager(self):
         return KubernetesResourceManager(
             labels=create_charm_default_labels(
-                self.app.name, self.model.name, scope=GATEWAY_LABEL
+                self.app.name, self.model.name, scope=GATEWAY_SCOPE
             ),
             resource_types=GATEWAY_RESOURCE_TYPES,  # pyright: ignore
             lightkube_client=self.lightkube_client,
@@ -232,7 +232,7 @@ class IstioIngressCharm(CharmBase):
     def _get_ingress_resource_manager(self):
         return KubernetesResourceManager(
             labels=create_charm_default_labels(
-                self.app.name, self.model.name, scope=INGRESS_LABEL
+                self.app.name, self.model.name, scope=INGRESS_SCOPE
             ),
             resource_types=INGRESS_RESOURCE_TYPES,  # pyright: ignore
             lightkube_client=self.lightkube_client,
@@ -242,7 +242,7 @@ class IstioIngressCharm(CharmBase):
     def _get_authorization_policy_resource_manager(self):
         return KubernetesResourceManager(
             labels=create_charm_default_labels(
-                self.app.name, self.model.name, scope=AUTHORIZATION_POLICY_LABEL
+                self.app.name, self.model.name, scope=AUTHORIZATION_POLICY_SCOPE
             ),
             resource_types=AUTHORIZATION_POLICY_RESOURCE_TYPES,  # pyright: ignore
             lightkube_client=self.lightkube_client,
@@ -471,7 +471,7 @@ class IstioIngressCharm(CharmBase):
 
         auth_policy = AuthorizationPolicyResource(
             metadata=Metadata(
-                name=data.app.name + "-" + self.app.name + "-l4-policy",
+                name=data.app.name + "-" + self.app.name + "-" + data.app.model + "-l4",
                 namespace=data.app.model,
             ),
             spec=AuthorizationPolicySpec(
