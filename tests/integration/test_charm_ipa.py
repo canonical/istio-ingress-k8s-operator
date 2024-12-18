@@ -122,7 +122,7 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
 
 @pytest.mark.abort_on_fail
 async def test_auth_policy_validity(ops_test: OpsTest):
-    policy_name = f"{IPA_TESTER}-{APP_NAME}-{ops_test.model_full_name}-l4"
+    policy_name = f"{IPA_TESTER}-{APP_NAME}-{ops_test.model.name}-l4"
 
     # Retrieve the AuthorizationPolicy spec
     policy_spec = await get_auth_policy_spec(ops_test, policy_name)
@@ -150,7 +150,7 @@ async def test_auth_policy_validity(ops_test: OpsTest):
     principals = from_rules[0]["source"].get("principals", [])
     assert len(principals) == 1, "Expected exactly one principal in the 'source' field."
     assert (
-        principals[0] == f"cluster.local/ns/{ops_test.model_full_name}/sa/istio-ingress-k8s-istio"
+        principals[0] == f"cluster.local/ns/{ops_test.model.name}/sa/istio-ingress-k8s-istio"
     ), "Principal does not match expected format."
 
     # Validate 'selector' field
