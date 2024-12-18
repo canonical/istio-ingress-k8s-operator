@@ -90,6 +90,41 @@ def test_construct_httproute(
         )
 
 
+def test_construct_ingress_auth_policy(
+    istio_ingress_charm, istio_ingress_context, mock_ingress_requirer_data
+):
+    """Test that the _construct_ingress_auth_policy method constructs an Authorization Policy object correctly."""
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        auth_policy = charm._construct_ingress_auth_policy(
+            data=mock_ingress_requirer_data,
+        )
+
+        # Verify the AuthorizationPolicy resource
+        assert auth_policy.metadata.name == f"app-name-{charm.app.name}-app-namespace-l4"
+        assert auth_policy.metadata.namespace == "app-namespace"
+
+        # Check spec rules
+        assert len(auth_policy.spec["rules"]) == 1
+        rule = auth_policy.spec["rules"][0]
+
+        # Verify `to` field
+        assert rule["to"] == [{"operation": {"ports": ["80"]}}]
+
+        # Verify `from` field (principals)
+        principals = rule["from"][0]["source"]["principals"]
+        expected_principal = f"cluster.local/ns/{charm.model.name}/sa/{charm.managed_name}"
+        assert principals == [expected_principal]
+
+        # Verify workload selector
+        assert auth_policy.spec["selector"] == {
+            "matchLabels": {"app.kubernetes.io/name": "app-name"}
+        }
+
+
 def test_construct_redirect_to_https_httproute(
     istio_ingress_charm, istio_ingress_context, mock_ingress_requirer_data
 ):
@@ -181,9 +216,13 @@ def test_sync_ingress_resources(
     istio_ingress_context,
 ):
     """Test that the _sync_ingress_resources constructs HTTP routes when TLS is not configured."""
-    mock_krm = MagicMock()
-    mock_krm_factory = MagicMock(return_value=mock_krm)
+    # Mock Kubernetes Resource Managers
+    mock_ingress_manager = MagicMock()
+    mock_auth_manager = MagicMock()
+    mock_ingress_manager_factory = MagicMock(return_value=mock_ingress_manager)
+    mock_auth_manager_factory = MagicMock(return_value=mock_auth_manager)
 
+    # Initialize charm in test scenario
     with istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(
@@ -192,19 +231,35 @@ def test_sync_ingress_resources(
         ),
     ) as manager:
         charm: IstioIngressCharm = manager.charm
-        charm._get_ingress_resource_manager = mock_krm_factory
+
+        # Patch the managers into the charm
+        charm._get_ingress_resource_manager = mock_ingress_manager_factory
+        charm._get_authorization_policy_resource_manager = mock_auth_manager_factory
+
+        # Call the method under test
         charm._sync_ingress_resources()
 
-        # Assert that we've tried to reconcile the kubernetes resources
-        charm._get_ingress_resource_manager().reconcile.assert_called_once()
+        # Assertions: Managers' reconcile methods are called once
+        mock_ingress_manager.reconcile.assert_called_once()
+        mock_auth_manager.reconcile.assert_called_once()
 
-        # Assert that _+_______________________
-        resources = charm._get_ingress_resource_manager().reconcile.call_args[0][0]
+        # Retrieve the resources passed to reconcile
+        ingress_resources = mock_ingress_manager.reconcile.call_args[0][0]
+        auth_resources = mock_auth_manager.reconcile.call_args[0][0]
 
-        assert len(resources) == n_routes_expected
-        for route in resources:
+        # Assertions: Check resource counts
+        assert len(ingress_resources) == n_routes_expected
+        assert len(auth_resources) == n_routes_expected
+
+        # Assertions: Verify each ingress resource's structure
+        for route in ingress_resources:
             assert len(route.spec["parentRefs"]) == 1
             assert route.spec["parentRefs"][0]["sectionName"] == "http"
+
+        # Assertions: Verify authorization resources
+        for auth in auth_resources:
+            assert auth.metadata.name is not None
+            assert auth.metadata.namespace is not None
 
 
 @pytest.mark.parametrize(

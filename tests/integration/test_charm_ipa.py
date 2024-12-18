@@ -14,6 +14,7 @@ from conftest import (
 )
 from helpers import (
     dequote,
+    get_auth_policy_spec,
     get_k8s_service_address,
     get_listener_condition,
     get_listener_spec,
@@ -117,6 +118,49 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
     istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
 
     assert url == f"http://{istio_ingress_address}/{model}-ipa-tester"
+
+
+@pytest.mark.abort_on_fail
+async def test_auth_policy_validity(ops_test: OpsTest):
+    policy_name = f"{IPA_TESTER}-{APP_NAME}-{ops_test.model.name}-l4"
+
+    # Retrieve the AuthorizationPolicy spec
+    policy_spec = await get_auth_policy_spec(ops_test, policy_name)
+
+    # Ensure the policy spec is not None
+    assert policy_spec is not None, f"AuthorizationPolicy '{policy_name}' not found."
+
+    # Validate the 'rules' structure
+    assert "rules" in policy_spec, "'rules' field is missing in the AuthorizationPolicy spec."
+    rules = policy_spec["rules"]
+    assert len(rules) == 1, "Expected exactly one rule in AuthorizationPolicy spec."
+
+    # Validate the 'to' field inside the rule
+    to_rules = rules[0].get("to", [])
+    assert len(to_rules) == 1, "'to' field should contain exactly one operation."
+    assert "operation" in to_rules[0], "Missing 'operation' in the 'to' field."
+    assert to_rules[0]["operation"]["ports"] == [
+        "8080"
+    ], "Port mismatch in the AuthorizationPolicy."
+
+    # Validate the 'from' field inside the rule
+    from_rules = rules[0].get("from", [])
+    assert len(from_rules) == 1, "'from' field should contain exactly one source."
+    assert "source" in from_rules[0], "Missing 'source' in the 'from' field."
+    principals = from_rules[0]["source"].get("principals", [])
+    assert len(principals) == 1, "Expected exactly one principal in the 'source' field."
+    assert (
+        principals[0] == f"cluster.local/ns/{ops_test.model.name}/sa/istio-ingress-k8s-istio"
+    ), "Principal does not match expected format."
+
+    # Validate 'selector' field
+    assert (
+        "selector" in policy_spec
+    ), "'selector' field is missing in the AuthorizationPolicy spec."
+    match_labels = policy_spec["selector"].get("matchLabels", {})
+    assert (
+        match_labels.get("app.kubernetes.io/name") == "ipa-tester"
+    ), "AuthorizationPolicy selector does not match the expected app name."
 
 
 @pytest.mark.abort_on_fail
