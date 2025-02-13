@@ -174,6 +174,7 @@ class IstioIngressCharm(CharmBase):
                 peer_relation_name="peers",
                 certificates_relation_name="certificates",
                 sans=[external_hostname],
+                cert_subject=external_hostname,
                 # Use a custom event for the charm to signal to the library that we may have changed something
                 # meaningful for the CSR.  CertHandler will only regenerate the CSR and obtain new certs if it detects
                 # a change when handling this event.
