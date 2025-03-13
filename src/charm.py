@@ -10,6 +10,7 @@ import re
 import time
 from typing import Any, Dict, Optional, cast
 
+from charms.istio_k8s.v0.istio_ingress_config import IngressConfigProvider
 from charms.observability_libs.v1.cert_handler import CertHandler
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.tempo_coordinator_k8s.v0.charm_tracing import trace_charm
@@ -148,7 +149,9 @@ class IstioIngressCharm(CharmBase):
         self._charm_tracing_endpoint = (
             self.charm_tracing.get_endpoint("otlp_http") if self.charm_tracing.relations else None
         )
-
+        self.ingress_config = IngressConfigProvider(
+            relation_mapping=self.model.relations, app=self.app, model_name=self.model.name
+        )
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.remove, self._on_remove)
         self.framework.observe(
@@ -159,6 +162,18 @@ class IstioIngressCharm(CharmBase):
         )
         self.framework.observe(
             self.on.metrics_proxy_pebble_ready, self._metrics_proxy_pebble_ready
+        )
+        self.framework.observe(
+            self.on["istio-ingress-config"].relation_joined, self._handle_ingress_config
+        )
+        self.framework.observe(
+            self.on["istio-ingress-config"].relation_changed, self._handle_ingress_config
+        )
+        self.framework.observe(
+            self.on["istio-ingress-config"].relation_broken, self._handle_ingress_config
+        )
+        self.framework.observe(
+            self.on["istio-ingress-config"].relation_departed, self._handle_ingress_config
         )
         # During the initialisation of the charm, we do not have a LoadBalancer and thus a LoadBalancer external IP.
         # If we need that IP to request the certs, disable cert handling until we have it.
@@ -260,6 +275,10 @@ class IstioIngressCharm(CharmBase):
 
     def _metrics_proxy_pebble_ready(self, _):
         """Event handler for metrics_proxy_pebble_ready."""
+        self._sync_all_resources()
+
+    def _handle_ingress_config(self, _):
+        """Event handler for ingress_config relation events."""
         self._sync_all_resources()
 
     def _on_remove(self, _):
@@ -558,6 +577,7 @@ class IstioIngressCharm(CharmBase):
             try:
                 self._sync_ingress_resources()
                 self._setup_proxy_pebble_service()
+                self._sync_ingress_config()
                 self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
             except DataValidationError or ApiError:
                 self.unit.status = BlockedStatus("Issue with setting up an ingress")
@@ -568,6 +588,14 @@ class IstioIngressCharm(CharmBase):
                 "Requesting CertHandler inspect certs to decide if our CSR has changed and we should re-request"
             )
             self.on.refresh_certs.emit()
+
+    def _sync_ingress_config(self):
+        # TODO: Provide actual oauth details, below is just implemented as a placeholder for now
+        self.ingress_config.publish(oauth_service_name="foo.service", oauth_port="8080")
+        if self.ingress_config.is_requirer_ready():
+            provider_name = self.ingress_config.get_oauth_provider_name()
+            # TODO: Actually do something with the provider_name
+            logger.info(f"Currently connected to {provider_name}")
 
     def _sync_gateway_resources(self):
         krm = self._get_gateway_resource_manager()
