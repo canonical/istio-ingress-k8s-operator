@@ -150,7 +150,7 @@ class IstioIngressCharm(CharmBase):
             self.charm_tracing.get_endpoint("otlp_http") if self.charm_tracing.relations else None
         )
         self.ingress_config = IngressConfigProvider(
-            relation_mapping=self.model.relations, app=self.app, model_name=self.model.name
+            relation_mapping=self.model.relations, app=self.app
         )
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.remove, self._on_remove)
@@ -164,16 +164,10 @@ class IstioIngressCharm(CharmBase):
             self.on.metrics_proxy_pebble_ready, self._metrics_proxy_pebble_ready
         )
         self.framework.observe(
-            self.on["istio-ingress-config"].relation_joined, self._handle_ingress_config
-        )
-        self.framework.observe(
             self.on["istio-ingress-config"].relation_changed, self._handle_ingress_config
         )
         self.framework.observe(
             self.on["istio-ingress-config"].relation_broken, self._handle_ingress_config
-        )
-        self.framework.observe(
-            self.on["istio-ingress-config"].relation_departed, self._handle_ingress_config
         )
         # During the initialisation of the charm, we do not have a LoadBalancer and thus a LoadBalancer external IP.
         # If we need that IP to request the certs, disable cert handling until we have it.
@@ -590,10 +584,10 @@ class IstioIngressCharm(CharmBase):
             self.on.refresh_certs.emit()
 
     def _sync_ingress_config(self):
-        # TODO: Provide actual oauth details, below is just implemented as a placeholder for now
-        self.ingress_config.publish(oauth_service_name="foo.service", oauth_port="8080")
+        # TODO: Provide actual ext_authz details, below is just implemented as a placeholder for now
+        self.ingress_config.publish(ext_authz_service_name="foo.service", ext_authz_port="8080")
         if self.ingress_config.is_requirer_ready():
-            provider_name = self.ingress_config.get_oauth_provider_name()
+            provider_name = self.ingress_config.get_ext_authz_provider_name()
             # TODO: Actually do something with the provider_name
             logger.info(f"Currently connected to {provider_name}")
 
