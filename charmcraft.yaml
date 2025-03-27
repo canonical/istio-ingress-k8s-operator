@@ -79,6 +79,7 @@ provides:
     interface: prometheus_scrape
   istio-ingress-config:
     interface: istio_ingress_config
+    limit: 1
     description: |
       Provides an interface for exchanging Istio ingress configuration,
       including external authorizer configuration details.
@@ -94,6 +95,9 @@ requires:
     limit: 1
     description: |
       Enables sending charm traces to a distributed tracing backend such as Tempo.
+  forward-auth:
+    interface: forward_auth
+    limit: 1
 
 resources:
   metrics-proxy-image:

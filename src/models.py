@@ -6,7 +6,7 @@
 from enum import Enum
 from typing import Dict, List, Optional
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 # Global metadata schema
@@ -176,6 +176,16 @@ class Action(str, Enum):
     """Action is a type that represents the action to take when a rule matches."""
 
     allow = "ALLOW"
+    custom = "CUSTOM"
+
+
+class PolicyTargetReference(BaseModel):
+    """PolicyTargetReference defines the target of the policy."""
+
+    group: str
+    kind: str
+    name: str
+    namespace: Optional[str] = None
 
 
 class WorkloadSelector(BaseModel):
@@ -209,6 +219,12 @@ class To(BaseModel):
     operation: Optional[Operation] = None
 
 
+class Provider(BaseModel):
+    """Specifies the name of the extension provider, must be used only with CUSTOM action."""
+
+    name: Optional[str] = None
+
+
 class AuthRule(BaseModel):
     """AuthRule defines a policy rule."""
 
@@ -222,9 +238,20 @@ class AuthRule(BaseModel):
 class AuthorizationPolicySpec(BaseModel):
     """AuthorizationPolicySpec defines the spec of an Istio AuthorizationPolicy Kubernetes resource."""
 
-    action: Action = Action.allow
+    action: Action
     rules: List[AuthRule]
-    selector: WorkloadSelector
+    targetRefs: Optional[List[PolicyTargetReference]] = Field(default=None)
+    selector: Optional[WorkloadSelector] = Field(default=None)
+    provider: Optional[Provider] = Field(default=None)
+
+    @model_validator(mode="after")
+    def validate_target(self):
+        """Validate that at most one of targetRefs and selector is defined."""
+        if self.targetRefs is not None and self.selector is not None:
+            raise ValueError("At most one of targetRefs and selector can be set")
+        if self.provider is not None and self.action is not Action.custom:
+            raise ValueError("CUSTOM action must be set when specifying extension providers")
+        return self
 
 
 class AuthorizationPolicyResource(BaseModel):
