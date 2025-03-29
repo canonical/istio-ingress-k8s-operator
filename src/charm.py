@@ -627,11 +627,11 @@ class IstioIngressCharm(CharmBase):
 
         Flow:
         1. Check forward authentication configuration.
-            - If auth relation exists but no decisions address, set to blocked and remove gatway.
+            - If auth relation exists but no decisions address, set to blocked and remove gateway.
         2. Synchronize gateway resources and validate readiness.
         3. Validate the external hostname.
         4. Synchronize external authorization configuration.
-            - If missing valid ingress-config relation when auth is provided, set to blocked and remove gatway.
+            - If missing valid ingress-config relation when auth is provided, set to blocked and remove gateway.
         5. Synchronize ingress resources and set up the proxy service.
         6. Request certificate inspection.
         """
