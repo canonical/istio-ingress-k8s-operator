@@ -245,10 +245,15 @@ class AuthorizationPolicySpec(BaseModel):
     provider: Optional[Provider] = Field(default=None)
 
     @model_validator(mode="after")
-    def validate_target(self):
+    def validate_target_refs_selector(self):
         """Validate that at most one of targetRefs and selector is defined."""
         if self.targetRefs is not None and self.selector is not None:
             raise ValueError("At most one of targetRefs and selector can be set")
+        return self
+
+    @model_validator(mode="after")
+    def validate_provider_action(self):
+        """Validate that CUSTOM action must be set when specifying extension providers."""
         if self.provider is not None and self.action is not Action.custom:
             raise ValueError("CUSTOM action must be set when specifying extension providers")
         return self

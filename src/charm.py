@@ -8,7 +8,7 @@
 import logging
 import re
 import time
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, Optional, Tuple, cast
 from urllib.parse import urlparse
 
 from charms.istio_k8s.v0.istio_ingress_config import IngressConfigProvider
@@ -102,6 +102,8 @@ INGRESS_AUTH_POLICY_SCOPE = "istio-ingress-authorization-policy"
 EXTZ_AUTH_POLICY_SCOPE = "external-authorizer-authorization-policy"
 
 INGRESS_CONFIG_RELATION = "istio-ingress-config"
+FORWARD_AUTH_RELATION = "forward-auth"
+
 
 class DataValidationError(RuntimeError):
     """Raised when data validation fails on IPU relation data."""
@@ -321,6 +323,10 @@ class IstioIngressCharm(CharmBase):
     def _on_ingress_data_removed(self, _):
         """Handle a unit removing the data needed to provide ingress."""
         self._sync_all_resources()
+
+    def _remove_gateway_resources(self):
+        kgm = self._get_gateway_resource_manager()
+        kgm.delete()
 
     def _is_deployment_ready(self) -> bool:
         """Check if the deployment is ready after 10 attempts."""
@@ -617,53 +623,148 @@ class IstioIngressCharm(CharmBase):
         )
 
     def _sync_all_resources(self):
-        self._sync_gateway_resources()
+        """Synchronize all resources including authentication, gateway, ingress, and certificates.
 
-        self.unit.status = MaintenanceStatus("Validating gateway readiness")
-
-        if self._is_ready():
-            if not self._external_host:
-                self.unit.status = BlockedStatus(
-                    "Invalid hostname provided, Please ensure this adheres to RFC 1123."
-                )
-                return
-            try:
-                self._sync_ext_authz_config()
-                self._sync_ingress_resources()
-                self._setup_proxy_pebble_service()
-                self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
-            except DataValidationError or ApiError:
-                self.unit.status = BlockedStatus("Issue with setting up an ingress")
-
-            # Request a cert refresh in case configuration has changed
-            # The cert handler will only refresh if it detects a meaningful change
-            logger.info(
-                "Requesting CertHandler inspect certs to decide if our CSR has changed and we should re-request"
+        Flow:
+        1. Check forward authentication configuration.
+            - If auth relation exists but no decisions address, set to blocked and remove gatway.
+        2. Synchronize gateway resources and validate readiness.
+        3. Validate the external hostname.
+        4. Synchronize external authorization configuration.
+            - If missing valid ingress-config relation when auth is provided, set to blocked and remove gatway.
+        5. Synchronize ingress resources and set up the proxy service.
+        6. Request certificate inspection.
+        """
+        # 1. Validate authentication configuration.
+        auth_ready, auth_decisions_address = self._check_forward_auth_configuration()
+        # Guard if We have an auth relation but provider didn't publish an auth_decisions_address
+        if not auth_ready:
+            self.unit.status = BlockedStatus(
+                "Authentication configuration incomplete; ingress is disabled."
             )
-            self.on.refresh_certs.emit()
+            self._remove_gateway_resources()
+            return
 
-    def _sync_ext_authz_config(self):
+        # 2. Synchronize gateway resources and check readiness.
+        self._sync_gateway_resources()
+        self.unit.status = MaintenanceStatus("Validating gateway readiness")
+        if not self._is_ready():
+            return
+
+        # 3. Validate external hostname.
+        if not self._external_host:
+            self.unit.status = BlockedStatus(
+                "Invalid hostname provided, please ensure this adheres to RFC 1123."
+            )
+            return
+
+        # 4. Synchronize external authorization configuration.
+        # Guard if No ingress-config relation found and valid auth configs are provided
+        if not self._sync_ext_authz_config(auth_decisions_address):
+            self.unit.status = BlockedStatus(
+                "Ingress configuration relation missing, yet valid authentication configuration are provided."
+            )
+            self._remove_gateway_resources()
+            return
+
+        # 5. Synchronize ingress resources and set up the proxy service.
+        try:
+            self._sync_ingress_resources()
+            self._setup_proxy_pebble_service()
+            self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
+        except (DataValidationError, ApiError) as e:
+            logger.error("Ingress sync failed: %s", e)
+            self.unit.status = BlockedStatus("Issue with setting up an ingress")
+            return
+
+        # 6. Request certificate inspection.
+        # Request a cert refresh in case configuration has changed
+        # The cert handler will only refresh if it detects a meaningful change
+        logger.info(
+            "Requesting CertHandler inspect certs to decide if our CSR has changed and we should re-request"
+        )
+        self.on.refresh_certs.emit()
+
+    def _check_forward_auth_configuration(self) -> Tuple[bool, Optional[str]]:
+        """Check whether the forward-auth configuration is ready.
+
+        Returns:
+            A tuple (ready, decisions_address) where:
+            - ready is True if either no forward-auth relation is present
+                (which is considered success) or if a relation is present and it
+                includes a decisions_address.
+            - decisions_address is the retrieved decisions address if available;
+                otherwise, None.
+
+        If a forward-auth relation exists but is missing the decisions address,
+        the configuration is considered not ready.
+        """
+        if len(self.model.relations) == 0:
+            logger.debug("No relations found. Configuration is considered ready.")
+            return True, None
+
+        relation = self.model.get_relation(FORWARD_AUTH_RELATION)
+        if not relation or not relation.app:
+            logger.debug(
+                "Forward-auth relation or it's associated app is missing. Configuration is considered ready."
+            )
+            return True, None
+
+        auth_info = self.forward_auth.get_provider_info()
+        if not auth_info:
+            logger.debug("Forward-auth relation exists but auth_info is missing. Not ready.")
+            return False, None
+
+        if not auth_info.decisions_address:
+            logger.debug(
+                "Forward-auth relation exists but decisions_address is missing. Not ready."
+            )
+            return False, None
+
+        return True, auth_info.decisions_address
+
+    def _sync_ext_authz_config(self, decisions_address: Optional[str]) -> bool:
+        """Synchronize external authorization configuration.
+
+        Scenarios:
+        1. Valid ingress and valid auth: publish actual service, construct policy, return True.
+        2. Valid ingress and no auth: publish fake service, reconcile empty resources, return True.
+        3. No ingress and valid auth: do nothing, reconcile empty resources, return False.
+        4. No ingress and no auth: do nothing, reconcile empty resources, return True.
+
+        Returns:
+            True for Scenarios 1, 2, 4 and False for Scenario 3.
+        """
         policy_manager = self._get_extz_auth_policy_resource_manager()
         resources = []
 
-        auth_info = self.forward_auth.get_provider_info()
-        if not auth_info or not auth_info.decisions_address:
-            self.ingress_config.publish(ext_authz_service_name="fake_host", ext_authz_port="fake_port")
-            logger.warning("Auth configuration is not ready; missing decisions_address.")
-            policy_manager.reconcile(resources)
-            return
+        ingress_ready = self.ingress_config.is_requirer_ready()
+        auth_valid = decisions_address is not None
 
-        parsed_url = urlparse(auth_info.decisions_address)
-        service_name = parsed_url.hostname
-        port = parsed_url.port
-
-        self.ingress_config.publish(ext_authz_service_name=service_name, ext_authz_port=str(port))
-        rel = self.model.get_relation(INGRESS_CONFIG_RELATION)
-        if rel and self.ingress_config.is_requirer_ready(rel):
-            provider_name = self.ingress_config.get_ext_authz_provider_name(rel)
-            resources.append(self._construct_ext_authz_policy(provider_name))  # type: ignore
+        if ingress_ready:
+            if auth_valid:
+                # Scenario 1: Valid ingress and valid auth relation.
+                self.publish_ext_authz_config(decisions_address)
+                provider_name = self.ingress_config.get_ext_authz_provider_name()
+                resources.append(self._construct_ext_authz_policy(provider_name))  # type: ignore
+            else:
+                # Scenario 2: Valid ingress but no auth relation.
+                self.ingress_config.publish_fake_authz_config()
 
         policy_manager.reconcile(resources)
+        # Return True for Scenarios 1, 2, 4; False for Scenario 3.
+        return ingress_ready or not auth_valid
+
+    def publish_ext_authz_config(self, decisions_address: str) -> bool:
+        """Publish the external authorization service configuration using the provided decisions_address.
+
+        Assumes decisions_address is valid.
+        """
+        parsed_url = urlparse(decisions_address)
+        service_name = parsed_url.hostname
+        port = parsed_url.port
+        self.ingress_config.publish(ext_authz_service_name=service_name, ext_authz_port=str(port))
+        return True
 
     def _sync_gateway_resources(self):
         krm = self._get_gateway_resource_manager()
