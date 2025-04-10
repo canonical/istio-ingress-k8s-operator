@@ -638,7 +638,7 @@ class IstioIngressCharm(CharmBase):
         """
         # 1. Validate authentication configuration.
         auth_decisions_address = self._get_decisions_address()
-        if self._is_auth_related() and not auth_decisions_address:
+        if self._is_relation_established(FORWARD_AUTH_RELATION) and not auth_decisions_address:
             self.unit.status = BlockedStatus(
                 "Authentication configuration incomplete; ingress is disabled."
             )
@@ -646,7 +646,7 @@ class IstioIngressCharm(CharmBase):
             return
 
         # 2. Update ingress-config with the external authorization address if related.
-        if self._is_ingress_config_related():
+        if self._is_relation_established(INGRESS_CONFIG_RELATION):
             self._publish_ext_authz_config(auth_decisions_address)
 
         # 2. Synchronize gateway resources and check readiness.
@@ -689,18 +689,20 @@ class IstioIngressCharm(CharmBase):
         )
         self.on.refresh_certs.emit()
 
-    def _is_auth_related(self) -> bool:
-        """Check if the auth relation is established.
+    def _is_relation_established(self, relation_name: str) -> bool:
+        """Check if a given relation is established with an associated app.
+
+        Args:
+            relation_name: The name of the relation to check.
 
         Returns:
-            True if an auth relation exists and has an associated app;
-            otherwise, False.
+            True if the relation exists and has an associated app; otherwise, False.
         """
-        relation = self.model.get_relation(FORWARD_AUTH_RELATION)
+        relation = self.model.get_relation(relation_name)
         if relation and relation.app:
-            logger.debug("Auth relation is established.")
+            logger.debug("Relation '%s' is established.", relation_name)
             return True
-        logger.debug("Auth relation or its associated app is missing.")
+        logger.debug("Relation '%s' or its associated app is missing.", relation_name)
         return False
 
     def _get_decisions_address(self) -> Optional[str]:
@@ -722,20 +724,6 @@ class IstioIngressCharm(CharmBase):
             return None
 
         return auth_info.decisions_address
-
-    def _is_ingress_config_related(self) -> bool:
-        """Check if the ingress-config relation is established.
-
-        Returns:
-            True if an ingress-config relation exists and has an associated app;
-            otherwise, False.
-        """
-        relation = self.model.get_relation(INGRESS_CONFIG_RELATION)
-        if relation and relation.app:
-            logger.debug("Ingress config relation is established.")
-            return True
-        logger.debug("Ingress config or its associated app is missing.")
-        return False
 
     def _publish_ext_authz_config(self, decisions_address: Optional[str]):
         """Publish the external authorization service configuration using the provided decisions_address."""
