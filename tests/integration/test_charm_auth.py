@@ -24,7 +24,7 @@ resources = {
     "metrics-proxy-image": METADATA["resources"]["metrics-proxy-image"]["upstream-source"],
 }
 
-CORE_JUJU_MODEL = "istio-core"
+CORE_ISTIO_MODEL = "istio-core"
 INGRESS_CONFIG_RELATION = "istio-ingress-config"
 FORWARD_AUTH_RELATION = "forward-auth"
 
@@ -51,10 +51,10 @@ OAUTH2_K8S = CharmDeploymentConfiguration(
 
 
 @pytest.mark.abort_on_fail
-async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
+async def test_deploy_dependencies(ops_test: OpsTest):
     # Deploy Istio-k8s in a separate model and oauth2 istio-ingress-k8s in the primary model.
-    await ops_test.track_model(CORE_JUJU_MODEL)
-    istio_core = ops_test.models.get(CORE_JUJU_MODEL)
+    await ops_test.track_model(CORE_ISTIO_MODEL)
+    istio_core = ops_test.models.get(CORE_ISTIO_MODEL)
 
     await istio_core.model.deploy(**asdict(ISTIO_K8S))
     await istio_core.model.wait_for_idle(
@@ -77,17 +77,18 @@ async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
 
 @pytest.mark.abort_on_fail
 async def test_relations_setup(ops_test: OpsTest):
-    istio_core = ops_test.models.get(CORE_JUJU_MODEL)
+    istio_core = ops_test.models.get(CORE_ISTIO_MODEL)
 
-    await ops_test.model.add_relation(
-        f"{OAUTH2_K8S.application_name}:{FORWARD_AUTH_RELATION}", APP_NAME
-    )
     await istio_core.model.create_offer(
         endpoint=INGRESS_CONFIG_RELATION,
         offer_name=INGRESS_CONFIG_RELATION,
         application_name=ISTIO_K8S.application_name,
     )
     await ops_test.model.consume(f"admin/{ops_test.model.name}.{INGRESS_CONFIG_RELATION}")
+
+    await ops_test.model.add_relation(
+        f"{OAUTH2_K8S.application_name}:{FORWARD_AUTH_RELATION}", APP_NAME
+    )
     await ops_test.model.add_relation(INGRESS_CONFIG_RELATION, APP_NAME)
 
     await ops_test.model.wait_for_idle(
@@ -101,7 +102,7 @@ async def test_relations_setup(ops_test: OpsTest):
 @pytest.mark.abort_on_fail
 async def test_verify_initial_ext_authz_configuration(ops_test: OpsTest):
     """Initial configuration verification."""
-    istio_core = ops_test.models.get(CORE_JUJU_MODEL)
+    istio_core = ops_test.models.get(CORE_ISTIO_MODEL)
     policy_name = f"ext-authz-{APP_NAME}"
     await assert_config_state(ops_test, istio_core, policy_name)
 
@@ -109,7 +110,7 @@ async def test_verify_initial_ext_authz_configuration(ops_test: OpsTest):
 @pytest.mark.abort_on_fail
 async def test_oauth2_proxy_relation_break_and_recovery(ops_test: OpsTest):
     """Test breaking and recovering the oauth2-proxy:forward-auth relation."""
-    istio_core = ops_test.models.get(CORE_JUJU_MODEL)
+    istio_core = ops_test.models.get(CORE_ISTIO_MODEL)
     policy_name = f"ext-authz-{APP_NAME}"
 
     await ops_test.juju(
@@ -149,7 +150,7 @@ async def test_oauth2_proxy_relation_break_and_recovery(ops_test: OpsTest):
 @pytest.mark.abort_on_fail
 async def test_istio_ingress_config_relation_break_and_recovery(ops_test: OpsTest):
     """Test breaking and recovering the istio-ingress-config to istio-ingress-k8s relation."""
-    istio_core = ops_test.models.get(CORE_JUJU_MODEL)
+    istio_core = ops_test.models.get(CORE_ISTIO_MODEL)
     policy_name = f"ext-authz-{APP_NAME}"
 
     await ops_test.juju("remove-relation", INGRESS_CONFIG_RELATION, APP_NAME)
@@ -168,7 +169,7 @@ async def test_istio_ingress_config_relation_break_and_recovery(ops_test: OpsTes
     await ops_test.model.wait_for_idle(
         apps=[APP_NAME, OAUTH2_K8S.application_name], status="active", timeout=1000
     )
-    await ops_test.models.get(CORE_JUJU_MODEL).model.wait_for_idle(
+    await ops_test.models.get(CORE_ISTIO_MODEL).model.wait_for_idle(
         [ISTIO_K8S.application_name], status="active", timeout=1000
     )
 
