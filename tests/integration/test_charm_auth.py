@@ -109,7 +109,9 @@ async def test_oauth2_proxy_relation_break_and_recovery(ops_test: OpsTest):
     policy_name = f"ext-authz-{APP_NAME}"
 
     await ops_test.juju(
-        "remove-relation", f"{OAUTH2_K8S.application_name}:forward-auth", f"{APP_NAME}:forward-auth"
+        "remove-relation",
+        f"{OAUTH2_K8S.application_name}:forward-auth",
+        f"{APP_NAME}:forward-auth",
     )
 
     await ops_test.model.wait_for_idle(
