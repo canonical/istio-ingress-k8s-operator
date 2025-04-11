@@ -84,7 +84,7 @@ async def test_relations_setup(ops_test: OpsTest):
         offer_name=INGRESS_CONFIG_RELATION,
         application_name=ISTIO_K8S.application_name,
     )
-    await ops_test.model.consume(f"admin/{ops_test.model.name}.{INGRESS_CONFIG_RELATION}")
+    await ops_test.model.consume(f"admin/{istio_core.model.name}.{INGRESS_CONFIG_RELATION}")
 
     await ops_test.model.add_relation(
         f"{OAUTH2_K8S.application_name}:{FORWARD_AUTH_RELATION}", APP_NAME
