@@ -234,7 +234,7 @@ def test_sync_ingress_resources(
 
         # Patch the managers into the charm
         charm._get_ingress_resource_manager = mock_ingress_manager_factory
-        charm._get_authorization_policy_resource_manager = mock_auth_manager_factory
+        charm._get_ingress_auth_policy_resource_manager = mock_auth_manager_factory
 
         # Call the method under test
         charm._sync_ingress_resources()

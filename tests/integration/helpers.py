@@ -6,7 +6,7 @@ from urllib.parse import urlparse
 import lightkube
 import requests
 from lightkube.generic_resource import create_namespaced_resource
-from lightkube.resources.core_v1 import Service
+from lightkube.resources.core_v1 import ConfigMap, Service
 from pytest_operator.plugin import OpsTest
 from requests.adapters import DEFAULT_POOLBLOCK, DEFAULT_POOLSIZE, DEFAULT_RETRIES, HTTPAdapter
 
@@ -113,26 +113,45 @@ async def get_route_spec(ops_test: OpsTest, route_name: str) -> Optional[Dict[st
         return None
 
 
-async def get_auth_policy_spec(ops_test: OpsTest, policy_name: str) -> Optional[Dict[str, Any]]:
+async def get_auth_policy_spec(model_name: str, policy_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve and check the spec of the AuthorizationPolicy resource.
 
     Args:
-        ops_test: pytest-operator plugin
+        model_name: Name of the juju model.
         policy_name: Name of the AuthorizationPolicy resource.
 
     Returns:
         A dictionary representing the spec of the policy, or None if not found.
     """
-    model = ops_test.model.info
     try:
         c = lightkube.Client()
         policy = c.get(
-            RESOURCE_TYPES["AuthorizationPolicy"], namespace=model.name, name=policy_name
+            RESOURCE_TYPES["AuthorizationPolicy"], namespace=model_name, name=policy_name
         )
         return policy.spec
 
     except Exception as e:
         logger.error("Error retrieving AuthorizationPolicy condition: %s", e, exc_info=1)
+        return None
+
+
+async def get_configmap_data(model_name: str, cm_name: str) -> Optional[Dict[str, Any]]:
+    """Retrieve and check the data of the ConfigMap resource.
+
+    Args:
+        model_name: Name of the juju model.
+        cm_name: Name of the ConfigMap resource.
+
+    Returns:
+        A dictionary representing the data of the ConfigMap, or None if not found.
+    """
+    try:
+        c = lightkube.Client()
+        cm = c.get(ConfigMap, name=cm_name, namespace=model_name)
+        return cm.data
+
+    except Exception as e:
+        logger.error("Error retrieving ConfigMap: %s", e, exc_info=1)
         return None
 
 
