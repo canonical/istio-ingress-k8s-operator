@@ -84,8 +84,13 @@ async def test_relations_setup(ops_test: OpsTest):
         offer_name=INGRESS_CONFIG_RELATION,
         application_name=ISTIO_K8S.application_name,
     )
-    await ops_test.model.consume(f"admin/{istio_core.model.name}.{INGRESS_CONFIG_RELATION}")
+    # For some reason when using the direct consume() method, it raises a File not found error
+    # await ops_test.model.consume(f"admin/{istio_core.model.name}.{INGRESS_CONFIG_RELATION}")
 
+    await ops_test.juju(
+        "consume",
+        f"admin/{istio_core.model.name}.{INGRESS_CONFIG_RELATION}",
+    )
     await ops_test.model.add_relation(
         f"{OAUTH2_K8S.application_name}:{FORWARD_AUTH_RELATION}", APP_NAME
     )
@@ -127,9 +132,9 @@ async def test_oauth2_proxy_relation_break_and_recovery(ops_test: OpsTest):
     )
 
     # After breaking the relation, expect the policy to be removed and the extensionProviders cleared.
-    policy_spec = await get_auth_policy_spec(istio_core.model.name, policy_name)
+    policy_spec = await get_auth_policy_spec(ops_test.model.name, policy_name)
     assert not policy_spec
-    mesh_config = await load_mesh_config(ops_test)
+    mesh_config = await load_mesh_config(istio_core.model.name)
     extension_providers = mesh_config.get("extensionProviders", [])
     assert not extension_providers
 
@@ -176,9 +181,9 @@ async def test_istio_ingress_config_relation_break_and_recovery(ops_test: OpsTes
     await assert_config_state(ops_test, istio_core, policy_name)
 
 
-async def load_mesh_config(ops_test: OpsTest) -> dict:
+async def load_mesh_config(model_name: str) -> dict:
     """Load and parse the mesh configuration from the Istio ConfigMap."""
-    istio_cm_data = await get_configmap_data(ops_test.model.name, "istio")
+    istio_cm_data = await get_configmap_data(model_name, "istio")
     assert istio_cm_data, "Failed to retrieve 'istio' ConfigMap."
 
     mesh_config_yaml = istio_cm_data.get("mesh")
@@ -209,7 +214,7 @@ async def assert_config_state(ops_test: OpsTest, istio_core, policy_name: str) -
     - The Istio mesh config contains an extensionProvider with the proper envoy config.
     - The envoyExtAuthzHttp has a matching provider.
     """
-    policy_spec = await get_auth_policy_spec(istio_core.model.name, policy_name)
+    policy_spec = await get_auth_policy_spec(ops_test.model.name, policy_name)
     assert policy_spec, f"AuthorizationPolicy '{policy_name}' not found."
     assert policy_spec["action"] == "CUSTOM", f"Unexpected action {policy_spec.get('action')}"
 
@@ -217,10 +222,10 @@ async def assert_config_state(ops_test: OpsTest, istio_core, policy_name: str) -
     provider_name = provider.get("name", "")
     assert provider_name, "Provider name missing in policy."
 
-    mesh_config = await load_mesh_config(ops_test)
+    mesh_config = await load_mesh_config(istio_core.model.name)
     envoy_authz = get_envoy_authz(mesh_config, provider_name)
 
-    expected_service = f"{OAUTH2_K8S.application_name}.{istio_core.model.name}.svc.cluster.local"
+    expected_service = f"{OAUTH2_K8S.application_name}.{ops_test.model.name}.svc.cluster.local"
     assert (
         envoy_authz.get("service") == expected_service
     ), f"Expected service '{expected_service}', got '{envoy_authz.get('service')}'"
