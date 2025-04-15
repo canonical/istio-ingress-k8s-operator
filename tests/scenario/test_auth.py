@@ -9,48 +9,49 @@ from ops import ActiveStatus, BlockedStatus
 
 from charm import IstioIngressCharm
 
-# Test external authorization configuration setup for when we have a valid ingress-config relation in two scenarios:
-#   - When a forward-auth relation exists, its decisions address should be used.
-#   - When no forward-auth relation exists, the decisions address should be None, which would then clear the ingress-config databag.
-# The test patches:
-# - _is_ready to always return True (so that gateway readiness passes),
-# - _setup_proxy_pebble_service (to skip side effects),
-# - _publish_ext_authz_config and _sync_ext_authz_config to verify they are called.
-
 
 @pytest.mark.parametrize(
-    "forward_auth_present, expected_decision",
+    "forward_auth_relation, expected_decision",
     [
-        (True, "http://auth-service:80"),  # Forward-auth relation exists.
-        (False, None),  # No forward-auth relation.
+        # When a forward-auth relation exists, its decisions address should be used.
+        (
+            scenario.Relation(
+                endpoint="forward-auth",
+                interface="forward_auth",
+                remote_app_data={
+                    "decisions_address": "http://auth-service:80",
+                    "app_names": json.dumps(["my-app"]),
+                    "headers": json.dumps([]),
+                },
+            ),
+            "http://auth-service:80",
+        ),
+        # When no forward-auth relation exists, expected decision remains None.
+        (None, None),
     ],
 )
-@patch.object(IstioIngressCharm, "_sync_ext_authz_config")
-@patch.object(IstioIngressCharm, "_publish_ext_authz_config")
+# to verify it is called
+@patch.object(IstioIngressCharm, "_sync_ext_authz_auth_policy")
+# to verify it is called
+@patch.object(IstioIngressCharm, "_publish_to_istio_ingress_config_relation")
+# to skip side effects
 @patch.object(IstioIngressCharm, "_setup_proxy_pebble_service")
+# so that gateway readiness passes
 @patch.object(IstioIngressCharm, "_is_ready", return_value=True)
 def test_ext_authz_setup(
     mock_is_ready,
     mock_setup,
     mock_publish,
     mock_sync,
-    forward_auth_present,
+    forward_auth_relation,
     expected_decision,
     istio_ingress_charm,
     istio_ingress_context,
 ):
+    """Test external authorization configuration setup for when we have a valid ingress-config and different forward_auth situations."""
     relations = []
-    if forward_auth_present:
-        fwd_auth_relation = scenario.Relation(
-            endpoint="forward-auth",
-            interface="forward_auth",
-            remote_app_data={
-                "decisions_address": expected_decision,
-                "app_names": json.dumps(["my-app"]),
-                "headers": json.dumps([]),
-            },
-        )
-        relations.append(fwd_auth_relation)
+    if forward_auth_relation:
+        relations.append(forward_auth_relation)
 
     ingress_config_relation = scenario.Relation(
         endpoint="istio-ingress-config",
@@ -68,53 +69,51 @@ def test_ext_authz_setup(
     assert out.unit_status.message.startswith("Serving at")
 
 
-# Test external authorization configuration setup when the forward-auth or ingress-config relation is incomplete or missing:
-#   - Scenario A: The forward-auth relation is present but provides no decisions address.
-#   - Scenario B: The forward-auth relation provides a decisions address, but the ingress-config relation exists with incomplete data.
-# In both scenarios, the charm is expected to set a BlockedStatus and call _remove_gateway_resources.
-
-
 @pytest.mark.parametrize(
-    "fwd_remote_data, ingress_relation_present, expected_message",
+    "forward_auth_relation, ingress_config_relation, expected_message",
     [
-        # Scenario A: No decisions address provided.
+        # Scenario A: No decisions address provided, with no ingress-config relation.
         (
-            {},  # forward-auth remote_app_data is empty
-            False,  # No ingress-config relation
+            scenario.Relation(
+                endpoint="forward-auth",
+                interface="forward_auth",
+                remote_app_data={},  # forward-auth relation has empty data
+            ),
+            None,  # ingress-config relation is absent
             "Authentication configuration incomplete; ingress is disabled.",
         ),
-        # Scenario B: Decisions address provided but ingress-config is not ready (empty data).
+        # Scenario B: Decisions address provided, but ingress-config relation is present with empty data.
         (
-            {
-                "decisions_address": "http://auth-service:80",
-                "app_names": json.dumps(["my-app"]),
-                "headers": json.dumps([]),
-            },
-            True,  # ingress-config relation exists (but will be not ready)
+            scenario.Relation(
+                endpoint="forward-auth",
+                interface="forward_auth",
+                remote_app_data={
+                    "decisions_address": "http://auth-service:80",
+                    "app_names": json.dumps(["my-app"]),
+                    "headers": json.dumps([]),
+                },
+            ),
+            scenario.Relation(
+                endpoint="istio-ingress-config",
+                interface="istio_ingress_config",
+                remote_app_data={},  # ingress-config relation exists but has empty data
+            ),
             "Ingress configuration relation missing, yet valid authentication configuration are provided.",
         ),
     ],
 )
 def test_auth_and_ingress_incomplete(
-    fwd_remote_data,
-    ingress_relation_present,
+    forward_auth_relation,
+    ingress_config_relation,
     expected_message,
     istio_ingress_charm,
     istio_ingress_context,
 ):
-
-    fwd_auth_relation = scenario.Relation(
-        endpoint="forward-auth",
-        interface="forward_auth",
-        remote_app_data=fwd_remote_data,
-    )
-    relations = [fwd_auth_relation]
-    if ingress_relation_present:
-        ingress_config_relation = scenario.Relation(
-            endpoint="istio-ingress-config",
-            interface="istio_ingress_config",
-            remote_app_data={},
-        )
+    """Test external authorization configuration setup when the forward-auth or ingress-config relation is incomplete or missing."""
+    relations = []
+    if forward_auth_relation:
+        relations.append(forward_auth_relation)
+    if ingress_config_relation:
         relations.append(ingress_config_relation)
 
     state = scenario.State(relations=relations, leader=True)

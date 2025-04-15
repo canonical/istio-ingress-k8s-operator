@@ -627,17 +627,23 @@ class IstioIngressCharm(CharmBase):
 
         Flow:
         1. Check authentication configuration.
-            - If auth relation exists but no decisions address, set to blocked and remove gateway.
         2. Publish or clear the auth_decisions_address in ingress-config, if related.
-        3. Synchronize external authorization configuration.
+        3. If auth relation exists but no decisions address, set to blocked and remove gateway.
+        4. Synchronize external authorization configuration.
             - If missing valid ingress-config relation when auth is provided, set to blocked and remove gateway.
-        4. Synchronize gateway resources and validate readiness.
-        5. Validate the external hostname.
-        6. Synchronize ingress resources and set up the proxy service.
-        7. Request certificate inspection.
+        5. Synchronize gateway resources and validate readiness.
+        6. Validate the external hostname.
+        7. Synchronize ingress resources and set up the proxy service.
+        8. Request certificate inspection.
         """
         # 1. Check authentication configuration.
         auth_decisions_address = self._get_oauth_decisions_address()
+
+        # 2. Publish or clear the auth_decisions_address in ingress-config, if related.
+        if self.model.get_relation(INGRESS_CONFIG_RELATION):
+            self._publish_to_istio_ingress_config_relation(auth_decisions_address)
+
+        # 3. If auth relation exists but no decisions address, set to blocked and remove gateway.
         if self.model.get_relation(FORWARD_AUTH_RELATION) and not auth_decisions_address:
             self.unit.status = BlockedStatus(
                 "Authentication configuration incomplete; ingress is disabled."
@@ -645,33 +651,29 @@ class IstioIngressCharm(CharmBase):
             self._remove_gateway_resources()
             return
 
-        # 2. Publish or clear the auth_decisions_address in ingress-config, if related.
-        if self.model.get_relation(INGRESS_CONFIG_RELATION):
-            self._publish_ext_authz_config(auth_decisions_address)
-
-        # 3. Synchronize external authorization configuration.
+        # 4. Synchronize external authorization configuration.
         if not self.ingress_config.is_ready() and auth_decisions_address:
             self.unit.status = BlockedStatus(
                 "Ingress configuration relation missing, yet valid authentication configuration are provided."
             )
             self._remove_gateway_resources()
             return
-        self._sync_ext_authz_config(auth_decisions_address)
+        self._sync_ext_authz_auth_policy(auth_decisions_address)
 
-        # 4. Synchronize gateway resources and check readiness.
+        # 5. Synchronize gateway resources and check readiness.
         self._sync_gateway_resources()
         self.unit.status = MaintenanceStatus("Validating gateway readiness")
         if not self._is_ready():
             return
 
-        # 5. Validate external hostname.
+        # 6. Validate external hostname.
         if not self._external_host:
             self.unit.status = BlockedStatus(
                 "Invalid hostname provided, Please ensure this adheres to RFC 1123."
             )
             return
 
-        # 6. Synchronize ingress resources and set up the proxy service.
+        # 7. Synchronize ingress resources and set up the proxy service.
         try:
             self._sync_ingress_resources()
             self._setup_proxy_pebble_service()
@@ -681,7 +683,7 @@ class IstioIngressCharm(CharmBase):
             self.unit.status = BlockedStatus("Issue with setting up an ingress")
             return
 
-        # 7. Request certificate inspection.
+        # 8. Request certificate inspection.
         # Request a cert refresh in case configuration has changed
         # The cert handler will only refresh if it detects a meaningful change
         logger.info(
@@ -706,8 +708,7 @@ class IstioIngressCharm(CharmBase):
 
         return auth_info.decisions_address
 
-    def _publish_ext_authz_config(self, decisions_address: Optional[str]):
-        """Publish the external authorization service configuration using the provided decisions_address."""
+    def _publish_to_istio_ingress_config_relation(self, decisions_address: Optional[str]):
         if not decisions_address:
             self.ingress_config.clear()
             return
@@ -719,7 +720,7 @@ class IstioIngressCharm(CharmBase):
         # we should think about this as part of working on #issues/16
         self.ingress_config.publish(ext_authz_service_name=service_name, ext_authz_port=str(port))
 
-    def _sync_ext_authz_config(self, auth_decisions_address: Optional[str]):
+    def _sync_ext_authz_auth_policy(self, auth_decisions_address: Optional[str]):
         policy_manager = self._get_extz_auth_policy_resource_manager()
         resources = []
 
