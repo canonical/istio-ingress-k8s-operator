@@ -125,7 +125,7 @@ async def test_auth_policy_validity(ops_test: OpsTest):
     policy_name = f"{IPA_TESTER}-{APP_NAME}-{ops_test.model.name}-l4"
 
     # Retrieve the AuthorizationPolicy spec
-    policy_spec = await get_auth_policy_spec(ops_test, policy_name)
+    policy_spec = await get_auth_policy_spec(ops_test.model.name, policy_name)
 
     # Ensure the policy spec is not None
     assert policy_spec is not None, f"AuthorizationPolicy '{policy_name}' not found."
