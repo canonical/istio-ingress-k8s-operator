@@ -106,7 +106,7 @@ def test_external_hostname_config(
         # Unset the charm's cache of the external hostname.  This is required because while real config-changed event would
         # create a new instance of the charm (and thus have a clean cache), the test harness reuses the same instance and
         # the cache is populated on harness.begin().
-        charm._external_host_ = None
+        charm._ingress_url_ = None
         harness.update_config({"external_hostname": external_hostname})
         harness.evaluate_status()
         if expected_result:
@@ -116,7 +116,7 @@ def test_external_hostname_config(
                 charm.unit.status.message
                 == "Invalid hostname provided, Please ensure this adheres to RFC 1123."
             )
-        assert charm._external_host == expected_result
+        assert charm._ingress_url == expected_result
 
 
 def test_external_hostname_config_cached(harness: Harness[IstioIngressCharm]):
@@ -127,7 +127,7 @@ def test_external_hostname_config_cached(harness: Harness[IstioIngressCharm]):
     charm = harness.charm
 
     # Fetch the external_host, which should be the config value
-    actual_external_host = charm._external_host
+    actual_external_host = charm._ingress_url
     assert actual_external_host == expected_external_host
 
     # Change the config and then access it again to confirm we get the cached value
@@ -139,4 +139,4 @@ def test_external_hostname_config_cached(harness: Harness[IstioIngressCharm]):
     ):
         harness.set_leader(True)
         harness.update_config({"external_hostname": "new.com"})
-        assert charm._external_host == expected_external_host
+        assert charm._ingress_url == expected_external_host
