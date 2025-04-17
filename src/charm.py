@@ -12,7 +12,7 @@ from typing import Any, Dict, Optional, cast
 from urllib.parse import urlparse
 
 from charms.istio_k8s.v0.istio_ingress_config import IngressConfigProvider
-from charms.oauth2_proxy_k8s.v0.forward_auth import ForwardAuthRequirer
+from charms.oauth2_proxy_k8s.v0.forward_auth import ForwardAuthRequirer, ForwardAuthRequirerConfig
 from charms.observability_libs.v1.cert_handler import CertHandler
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.tempo_coordinator_k8s.v0.charm_tracing import trace_charm
@@ -634,7 +634,8 @@ class IstioIngressCharm(CharmBase):
         5. Synchronize gateway resources and validate readiness.
         6. Validate the external hostname.
         7. Synchronize ingress resources and set up the proxy service.
-        8. Request certificate inspection.
+        8. Update forward auth relation data with ingressed apps.
+        9. Request certificate inspection.
         """
         # 1. Check authentication configuration.
         auth_decisions_address = self._get_oauth_decisions_address()
@@ -683,7 +684,14 @@ class IstioIngressCharm(CharmBase):
             self.unit.status = BlockedStatus("Issue with setting up an ingress")
             return
 
-        # 8. Request certificate inspection.
+        # 8. Update forward auth relation data with ingressed apps.
+        if self.model.get_relation(FORWARD_AUTH_RELATION):
+            ingressed_apps = list(self.ingress_per_appv2.proxied_endpoints.keys())
+            self.forward_auth.update_requirer_relation_data(
+                ForwardAuthRequirerConfig(ingress_app_names=ingressed_apps)
+            )
+
+        # 9. Request certificate inspection.
         # Request a cert refresh in case configuration has changed
         # The cert handler will only refresh if it detects a meaningful change
         logger.info(
