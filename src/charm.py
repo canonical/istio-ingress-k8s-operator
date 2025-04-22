@@ -99,6 +99,7 @@ INGRESS_RESOURCE_TYPES = {
     RESOURCE_TYPES["HTTPRoute"],
 }
 INGRESS_AUTHENTICATED_NAME = "ingress"
+INGRESS_UNAUTHENTICATED_NAME = "ingress-unauthenticated"
 AUTHORIZATION_POLICY_RESOURCE_TYPES = {RESOURCE_TYPES["AuthorizationPolicy"]}
 
 GATEWAY_SCOPE = "istio-gateway"
@@ -164,6 +165,10 @@ class IstioIngressCharm(CharmBase):
             INGRESS_AUTHENTICATED_NAME: IPAv2(
                 charm=self,
                 relation_name=INGRESS_AUTHENTICATED_NAME,
+            ),
+            INGRESS_UNAUTHENTICATED_NAME: IPAv2(
+                charm=self,
+                relation_name=INGRESS_UNAUTHENTICATED_NAME,
             ),
         }
         self.telemetry_labels = {
@@ -606,7 +611,16 @@ class IstioIngressCharm(CharmBase):
             spec=auth_policy.spec.model_dump(by_alias=True, exclude_unset=True, exclude_none=True),
         )
 
-    def _construct_ext_authz_policy(self, ext_authz_provider_name: str):
+    def _construct_ext_authz_policy(
+        self, ext_authz_provider_name: str, unauthenticated_paths: List[str]
+    ):
+        """Return an AuthorizationPolicy that applies authentication to all paths except unauthenticated_paths."""
+        if unauthenticated_paths:
+            auth_rule = AuthRule(
+                to=[To(operation=Operation(notPaths=unauthenticated_paths))],
+            )
+        else:
+            auth_rule = AuthRule()
 
         ext_authz_policy = AuthorizationPolicyResource(
             metadata=Metadata(
@@ -614,7 +628,7 @@ class IstioIngressCharm(CharmBase):
                 namespace=self.model.name,
             ),
             spec=AuthorizationPolicySpec(
-                rules=[AuthRule()],
+                rules=[auth_rule],
                 targetRefs=[
                     PolicyTargetReference(
                         kind="Gateway",
@@ -733,6 +747,7 @@ class IstioIngressCharm(CharmBase):
         deduplicate_app_route_data(application_route_data)
         # TODO: Capture a BlockedStatus here if there's duplicates
         #  (https://github.com/canonical/istio-ingress-k8s-operator/issues/57)
+        unauthenticated_paths = get_unauthenticated_paths(application_route_data)
 
         # Synchronize external authorization configuration.
         if not self.ingress_config.is_ready() and auth_decisions_address:
@@ -741,7 +756,7 @@ class IstioIngressCharm(CharmBase):
             )
             self._remove_gateway_resources()
             return
-        self._sync_ext_authz_auth_policy(auth_decisions_address)
+        self._sync_ext_authz_auth_policy(auth_decisions_address, unauthenticated_paths)
 
         # Reconcile HPA and gateway resources
 
@@ -898,13 +913,16 @@ class IstioIngressCharm(CharmBase):
         # we should think about this as part of working on #issues/16
         self.ingress_config.publish(ext_authz_service_name=service_name, ext_authz_port=str(port))
 
-    def _sync_ext_authz_auth_policy(self, auth_decisions_address: Optional[str]):
+    def _sync_ext_authz_auth_policy(
+        self, auth_decisions_address: Optional[str], unauthenticated_paths: List[str]
+    ):
+        """Reconcile the AuthorizationPolicy that applies authentication to this gateway."""
         policy_manager = self._get_extz_auth_policy_resource_manager()
         resources = []
 
         if self.ingress_config.is_ready() and auth_decisions_address:
             provider_name = self.ingress_config.get_ext_authz_provider_name()
-            resources.append(self._construct_ext_authz_policy(provider_name))  # type: ignore
+            resources.append(self._construct_ext_authz_policy(provider_name, unauthenticated_paths=unauthenticated_paths))  # type: ignore
 
         policy_manager.reconcile(resources)
 
@@ -1208,6 +1226,16 @@ def deduplicate_app_route_data(application_route_data) -> bool:
             application_route_data[route_key]["routes"] = {}
 
     return len(duplicate_prefix_to_app_map) > 0
+
+
+def get_unauthenticated_paths(application_route_data):
+    """Return a list of the paths requested through the Gateway on the unauthenticated ingress."""
+    unauthenticated_paths = []
+    for (_, endpoint), route_data in application_route_data.items():
+        if endpoint == INGRESS_UNAUTHENTICATED_NAME:
+            for route in route_data["routes"]:
+                unauthenticated_paths.append(route["prefix"])
+    return unauthenticated_paths
 
 
 if __name__ == "__main__":

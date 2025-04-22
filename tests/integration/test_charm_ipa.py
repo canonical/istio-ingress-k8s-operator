@@ -30,6 +30,7 @@ logger = logging.getLogger(__name__)
 METADATA = yaml.safe_load(Path("./charmcraft.yaml").read_text())
 APP_NAME = METADATA["name"]
 IPA_TESTER = "ipa-tester"
+IPA_TESTER_UNAUTHENTICATED = "ipa-tester-unauthenticated"
 resources = {
     "metrics-proxy-image": METADATA["resources"]["metrics-proxy-image"]["upstream-source"],
 }
@@ -72,16 +73,19 @@ async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
         timeout=1000,
     )
 
-    # Deploy ipa-tester
+    # Deploy ipa-testers
     await ops_test.model.deploy(
         ipa_tester_charm,
         application_name=IPA_TESTER,
         resources={"echo-server-image": "jmalloc/echo-server:v0.3.7"},
-    ),
+    )
+    await ops_test.model.deploy(
+        ipa_tester_charm,
+        application_name=IPA_TESTER_UNAUTHENTICATED,
+        resources={"echo-server-image": "jmalloc/echo-server:v0.3.7"},
+    )
     await ops_test.model.wait_for_idle(
-        [
-            IPA_TESTER,
-        ],
+        [IPA_TESTER, IPA_TESTER_UNAUTHENTICATED],
         status="active",
         timeout=1000,
     )
@@ -97,12 +101,16 @@ async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
 
 @pytest.mark.abort_on_fail
 async def test_relate(ops_test: OpsTest):
-    await ops_test.model.add_relation("ipa-tester:ingress", "istio-ingress-k8s:ingress")
-    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER], status="active", timeout=1000)
+    await ops_test.model.add_relation(f"{IPA_TESTER}:ingress", "istio-ingress-k8s:ingress")
+    await ops_test.model.add_relation(
+        f"{IPA_TESTER_UNAUTHENTICATED}:ingress", "istio-ingress-k8s:ingress"
+    )
+    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER, IPA_TESTER_UNAUTHENTICATED], status="active", timeout=1000)
 
 
 @pytest.mark.abort_on_fail
 async def test_ipa_charm_has_ingress(ops_test: OpsTest):
+    """Spot check directly on the relation data that we have provided an ingress."""
     data = get_relation_data(
         requirer_endpoint="ipa-tester/0:ingress",
         provider_endpoint="istio-ingress-k8s/0:ingress",
@@ -122,45 +130,47 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
 
 @pytest.mark.abort_on_fail
 async def test_auth_policy_validity(ops_test: OpsTest):
-    policy_name = f"{IPA_TESTER}-{APP_NAME}-{ops_test.model.name}-l4"
+    for ipa_tester in [IPA_TESTER, IPA_TESTER_UNAUTHENTICATED]:
 
-    # Retrieve the AuthorizationPolicy spec
-    policy_spec = await get_auth_policy_spec(ops_test.model.name, policy_name)
+        policy_name = f"{ipa_tester}-{APP_NAME}-{ops_test.model.name}-l4"
 
-    # Ensure the policy spec is not None
-    assert policy_spec is not None, f"AuthorizationPolicy '{policy_name}' not found."
+        # Retrieve the AuthorizationPolicy spec
+        policy_spec = await get_auth_policy_spec(ops_test.model.name, policy_name)
 
-    # Validate the 'rules' structure
-    assert "rules" in policy_spec, "'rules' field is missing in the AuthorizationPolicy spec."
-    rules = policy_spec["rules"]
-    assert len(rules) == 1, "Expected exactly one rule in AuthorizationPolicy spec."
+        # Ensure the policy spec is not None
+        assert policy_spec is not None, f"AuthorizationPolicy '{policy_name}' not found."
 
-    # Validate the 'to' field inside the rule
-    to_rules = rules[0].get("to", [])
-    assert len(to_rules) == 1, "'to' field should contain exactly one operation."
-    assert "operation" in to_rules[0], "Missing 'operation' in the 'to' field."
-    assert to_rules[0]["operation"]["ports"] == [
-        "8080"
-    ], "Port mismatch in the AuthorizationPolicy."
+        # Validate the 'rules' structure
+        assert "rules" in policy_spec, "'rules' field is missing in the AuthorizationPolicy spec."
+        rules = policy_spec["rules"]
+        assert len(rules) == 1, "Expected exactly one rule in AuthorizationPolicy spec."
 
-    # Validate the 'from' field inside the rule
-    from_rules = rules[0].get("from", [])
-    assert len(from_rules) == 1, "'from' field should contain exactly one source."
-    assert "source" in from_rules[0], "Missing 'source' in the 'from' field."
-    principals = from_rules[0]["source"].get("principals", [])
-    assert len(principals) == 1, "Expected exactly one principal in the 'source' field."
-    assert (
-        principals[0] == f"cluster.local/ns/{ops_test.model.name}/sa/istio-ingress-k8s-istio"
-    ), "Principal does not match expected format."
+        # Validate the 'to' field inside the rule
+        to_rules = rules[0].get("to", [])
+        assert len(to_rules) == 1, "'to' field should contain exactly one operation."
+        assert "operation" in to_rules[0], "Missing 'operation' in the 'to' field."
+        assert to_rules[0]["operation"]["ports"] == [
+            "8080"
+        ], "Port mismatch in the AuthorizationPolicy."
 
-    # Validate 'selector' field
-    assert (
-        "selector" in policy_spec
-    ), "'selector' field is missing in the AuthorizationPolicy spec."
-    match_labels = policy_spec["selector"].get("matchLabels", {})
-    assert (
-        match_labels.get("app.kubernetes.io/name") == "ipa-tester"
-    ), "AuthorizationPolicy selector does not match the expected app name."
+        # Validate the 'from' field inside the rule
+        from_rules = rules[0].get("from", [])
+        assert len(from_rules) == 1, "'from' field should contain exactly one source."
+        assert "source" in from_rules[0], "Missing 'source' in the 'from' field."
+        principals = from_rules[0]["source"].get("principals", [])
+        assert len(principals) == 1, "Expected exactly one principal in the 'source' field."
+        assert (
+            principals[0] == f"cluster.local/ns/{ops_test.model.name}/sa/istio-ingress-k8s-istio"
+        ), "Principal does not match expected format."
+
+        # Validate 'selector' field
+        assert (
+            "selector" in policy_spec
+        ), "'selector' field is missing in the AuthorizationPolicy spec."
+        match_labels = policy_spec["selector"].get("matchLabels", {})
+        assert (
+            match_labels.get("app.kubernetes.io/name") == ipa_tester
+        ), "AuthorizationPolicy selector does not match the expected app name."
 
 
 @pytest.mark.abort_on_fail
@@ -175,36 +185,39 @@ async def test_auth_policy_validity(ops_test: OpsTest):
 async def test_route_validity(
     ops_test: OpsTest, external_hostname: str, expected_hostname: Optional[str]
 ):
+    """Test that routes to apps related on the ingress and ingress-unauthenticated endpoints work as expected."""
     await ops_test.model.applications[APP_NAME].set_config(
         {"external_hostname": external_hostname}
     )
-    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER], status="active", timeout=1000)
+    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER, IPA_TESTER_UNAUTHENTICATED], status="active", timeout=1000)
 
     model = ops_test.model.name
-
+    # TODO: FIX THIS
     istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
-    tester_url = f"http://{istio_ingress_address}/{model}-{IPA_TESTER}"
+
+    for ipa_tester in [IPA_TESTER, IPA_TESTER_UNAUTHENTICATED]:
+        tester_url = f"http://{istio_ingress_address}/{model}-{ipa_tester}"
 
     listener_condition = await get_listener_condition(ops_test, "istio-ingress-k8s")
     route_condition = await get_route_condition(ops_test, f"{IPA_TESTER}-http-{APP_NAME}")
     listener_spec = await get_listener_spec(ops_test, "istio-ingress-k8s")
 
-    assert listener_condition["attachedRoutes"] == 1
-    assert listener_condition["conditions"][0]["message"] == "No errors found"
-    assert listener_condition["conditions"][0]["reason"] == "Accepted"
+        assert listener_condition["attachedRoutes"] == 1
+        assert listener_condition["conditions"][0]["message"] == "No errors found"
+        assert listener_condition["conditions"][0]["reason"] == "Accepted"
 
-    assert route_condition["conditions"][0]["message"] == "Route was valid"
-    assert route_condition["conditions"][0]["reason"] == "Accepted"
-    assert route_condition["controllerName"] == "istio.io/gateway-controller"
+        assert route_condition["conditions"][0]["message"] == "Route was valid"
+        assert route_condition["conditions"][0]["reason"] == "Accepted"
+        assert route_condition["controllerName"] == "istio.io/gateway-controller"
 
-    if not expected_hostname:
-        assert "hostname" not in listener_spec
-        assert send_http_request(tester_url)
-    else:
-        assert listener_spec["hostname"] == expected_hostname
-        assert send_http_request(tester_url, {"Host": expected_hostname})
-        assert not send_http_request(tester_url)
-        assert not send_http_request(tester_url, {"Host": "random.hostname"})
+        if not expected_hostname:
+            assert "hostname" not in listener_spec
+            assert send_http_request(tester_url)
+        else:
+            assert listener_spec["hostname"] == expected_hostname
+            assert send_http_request(tester_url, {"Host": expected_hostname})
+            assert not send_http_request(tester_url)
+            assert not send_http_request(tester_url, {"Host": "random.hostname"})
 
 
 @pytest.fixture(scope="module")
