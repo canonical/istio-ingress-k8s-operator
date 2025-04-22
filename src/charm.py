@@ -22,8 +22,13 @@ from charms.traefik_k8s.v2.ingress import IngressRequirerData
 from lightkube.core.client import Client
 from lightkube.core.exceptions import ApiError
 from lightkube.generic_resource import create_namespaced_resource
+from lightkube.models.autoscaling_v2 import (
+    CrossVersionObjectReference,
+    HorizontalPodAutoscalerSpec,
+)
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.apps_v1 import Deployment
+from lightkube.resources.autoscaling_v2 import HorizontalPodAutoscaler
 from lightkube.resources.core_v1 import Secret, Service
 from lightkube.types import PatchType
 from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
@@ -96,13 +101,17 @@ INGRESS_RESOURCE_TYPES = {
     RESOURCE_TYPES["HTTPRoute"],
 }
 AUTHORIZATION_POLICY_RESOURCE_TYPES = {RESOURCE_TYPES["AuthorizationPolicy"]}
+HPA_RESOURCE_TYPES = {HorizontalPodAutoscaler}
+
 GATEWAY_SCOPE = "istio-gateway"
 INGRESS_SCOPE = "istio-ingress"
 INGRESS_AUTH_POLICY_SCOPE = "istio-ingress-authorization-policy"
 EXTZ_AUTH_POLICY_SCOPE = "external-authorizer-authorization-policy"
+HPA_SCOPE = "istio-ingress-hpa"
 
 INGRESS_CONFIG_RELATION = "istio-ingress-config"
 FORWARD_AUTH_RELATION = "forward-auth"
+PEERS_RELATION = "peers"
 
 
 class DataValidationError(RuntimeError):
@@ -182,6 +191,9 @@ class IstioIngressCharm(CharmBase):
             self.on[INGRESS_CONFIG_RELATION].relation_broken, self._handle_ingress_config
         )
         self.framework.observe(self.on.leader_elected, self._handle_ingress_config)
+        self.framework.observe(self.on[PEERS_RELATION].relation_joined, self._on_peers_changed)
+        self.framework.observe(self.on[PEERS_RELATION].relation_changed, self._on_peers_changed)
+
         # During the initialisation of the charm, we do not have a LoadBalancer and thus a LoadBalancer external IP.
         # If we need that IP to request the certs, disable cert handling until we have it.
         if (external_hostname := self._external_host) is None:
@@ -193,7 +205,7 @@ class IstioIngressCharm(CharmBase):
             self._cert_handler = CertHandler(
                 self,
                 key="istio-ingress-cert",  # TODO: how is this key used?  if we have two ingresses, do we get issues?
-                peer_relation_name="peers",
+                peer_relation_name=PEERS_RELATION,
                 certificates_relation_name="certificates",
                 sans=[external_hostname],
                 cert_subject=external_hostname,
@@ -282,6 +294,14 @@ class IstioIngressCharm(CharmBase):
             logger=logger,
         )
 
+    def _get_hpa_resource_manager(self):
+        return KubernetesResourceManager(
+            labels=create_charm_default_labels(self.app.name, self.model.name, scope=HPA_SCOPE),
+            resource_types=HPA_RESOURCE_TYPES,  # pyright: ignore
+            lightkube_client=self.lightkube_client,
+            logger=logger,
+        )
+
     def _on_cert_handler_cert_changed(self, _):
         """Event handler for when tls certificates have changed."""
         self._sync_all_resources()
@@ -302,11 +322,21 @@ class IstioIngressCharm(CharmBase):
         """Event handler for forward_auth config changes."""
         self._sync_all_resources()
 
+    def _on_peers_changed(self, _):
+        """Event handler for whenever peer topology changes."""
+        self._sync_all_resources()
+
     def _on_remove(self, _):
         """Event handler for remove."""
+        if not self.unit.is_leader():
+            return
+
         # Removing tailing ingresses
         kim = self._get_ingress_resource_manager()
         kim.delete()
+
+        khm = self._get_hpa_resource_manager()
+        khm.delete()
 
         self._remove_gateway_resources()
 
@@ -622,29 +652,47 @@ class IstioIngressCharm(CharmBase):
             spec=http_route.spec.model_dump(exclude_none=True),
         )
 
+    def _construct_hpa(self, unit_count: int) -> HorizontalPodAutoscaler:
+        return HorizontalPodAutoscaler(
+            metadata=ObjectMeta(name=self.app.name, namespace=self.model.name),
+            spec=HorizontalPodAutoscalerSpec(
+                scaleTargetRef=CrossVersionObjectReference(
+                    apiVersion="apps/v1",
+                    kind="Deployment",
+                    name=self.managed_name,
+                ),
+                minReplicas=unit_count,
+                maxReplicas=unit_count,
+            ),
+        )
+
     def _sync_all_resources(self):
         """Synchronize all resources including authentication, gateway, ingress, and certificates.
 
         Flow:
-        1. Check authentication configuration.
-        2. Publish or clear the auth_decisions_address in ingress-config, if related.
-        3. If auth relation exists but no decisions address, set to blocked and remove gateway.
-        4. Synchronize external authorization configuration.
+        * Check authentication configuration.
+        * Publish or clear the auth_decisions_address in ingress-config, if related.
+        * If auth relation exists but no decisions address, set to blocked and remove gateway.
+        * Synchronize external authorization configuration.
             - If missing valid ingress-config relation when auth is provided, set to blocked and remove gateway.
-        5. Synchronize gateway resources and validate readiness.
-        6. Validate the external hostname.
-        7. Synchronize ingress resources and set up the proxy service.
-        8. Update forward auth relation data with ingressed apps.
-        9. Request certificate inspection.
+        * Synchronize gateway resources and validate readiness.
+        * Validate the external hostname.
+        * Synchronize ingress resources and set up the proxy service.
+        * Reconcile HPA so Gateway deployment's replicas match the current unit count
+        * Update forward auth relation data with ingressed apps.
+        * Request certificate inspection.
         """
-        # 1. Check authentication configuration.
+        if not self.unit.is_leader():
+            self.unit.status = ActiveStatus("Backup unit; standing by for leader takeover")
+            return
+        # Check authentication configuration.
         auth_decisions_address = self._get_oauth_decisions_address()
 
-        # 2. Publish or clear the auth_decisions_address in ingress-config, if related.
+        # Publish or clear the auth_decisions_address in ingress-config, if related.
         if self.model.get_relation(INGRESS_CONFIG_RELATION):
             self._publish_to_istio_ingress_config_relation(auth_decisions_address)
 
-        # 3. If auth relation exists but no decisions address, set to blocked and remove gateway.
+        # If auth relation exists but no decisions address, set to blocked and remove gateway.
         if self.model.get_relation(FORWARD_AUTH_RELATION) and not auth_decisions_address:
             self.unit.status = BlockedStatus(
                 "Authentication configuration incomplete; ingress is disabled."
@@ -652,7 +700,7 @@ class IstioIngressCharm(CharmBase):
             self._remove_gateway_resources()
             return
 
-        # 4. Synchronize external authorization configuration.
+        # Synchronize external authorization configuration.
         if not self.ingress_config.is_ready() and auth_decisions_address:
             self.unit.status = BlockedStatus(
                 "Ingress configuration relation missing, yet valid authentication configuration are provided."
@@ -661,20 +709,20 @@ class IstioIngressCharm(CharmBase):
             return
         self._sync_ext_authz_auth_policy(auth_decisions_address)
 
-        # 5. Synchronize gateway resources and check readiness.
+        # Synchronize gateway resources and check readiness.
         self._sync_gateway_resources()
         self.unit.status = MaintenanceStatus("Validating gateway readiness")
         if not self._is_ready():
             return
 
-        # 6. Validate external hostname.
+        # Validate external hostname.
         if not self._external_host:
             self.unit.status = BlockedStatus(
                 "Invalid hostname provided, Please ensure this adheres to RFC 1123."
             )
             return
 
-        # 7. Synchronize ingress resources and set up the proxy service.
+        # Synchronize ingress resources and set up the proxy service.
         try:
             self._sync_ingress_resources()
             self._setup_proxy_pebble_service()
@@ -684,14 +732,17 @@ class IstioIngressCharm(CharmBase):
             self.unit.status = BlockedStatus("Issue with setting up an ingress")
             return
 
-        # 8. Update forward auth relation data with ingressed apps.
+        # Reconcile HPA so Gateway deployment's replicas match the current unit count
+        self._sync_hpa_resources()
+
+        # Update forward auth relation data with ingressed apps.
         if self.model.get_relation(FORWARD_AUTH_RELATION):
             ingressed_apps = list(self.ingress_per_appv2.proxied_endpoints.keys())
             self.forward_auth.update_requirer_relation_data(
                 ForwardAuthRequirerConfig(ingress_app_names=ingressed_apps)
             )
 
-        # 9. Request certificate inspection.
+        # Request certificate inspection.
         # Request a cert refresh in case configuration has changed
         # The cert handler will only refresh if it detects a meaningful change
         logger.info(
@@ -842,6 +893,11 @@ class IstioIngressCharm(CharmBase):
 
         except ApiError:
             raise
+
+    def _sync_hpa_resources(self):
+        khm = self._get_hpa_resource_manager()
+        unit_count = self.model.app.planned_units()
+        khm.reconcile([self._construct_hpa(unit_count)])
 
     def _generate_external_url(self, prefix: str) -> str:
         """Generate external URL for the ingress."""

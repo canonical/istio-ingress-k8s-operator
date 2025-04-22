@@ -68,7 +68,7 @@ config:
 
 peers:
   peers:
-    interface: istio_k8s_peers
+    interface: istio_ingress_k8s_peers
 
 provides:
   ingress:

@@ -14,7 +14,9 @@ from conftest import (
 )
 from helpers import (
     dequote,
+    fetch_envoy_peer_metadata_ids,
     get_auth_policy_spec,
+    get_hpa,
     get_k8s_service_address,
     get_listener_condition,
     get_listener_spec,
@@ -93,6 +95,19 @@ async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
         istio_ingress_charm, resources=resources, application_name=APP_NAME, trust=True
     ),
     await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=1000)
+
+
+@pytest.mark.abort_on_fail
+async def test_scale(ops_test: OpsTest):
+    await ops_test.model.applications[APP_NAME].scale(3)
+    await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=1000)
+
+    hpa = await get_hpa(ops_test, f"{APP_NAME}-istio")
+
+    assert hpa is not None
+    assert hpa.spec.minReplicas == 3
+    assert hpa.spec.maxReplicas == 3
+    assert hpa.status.currentReplicas == 3
 
 
 @pytest.mark.abort_on_fail
@@ -205,6 +220,21 @@ async def test_route_validity(
         assert send_http_request(tester_url, {"Host": expected_hostname})
         assert not send_http_request(tester_url)
         assert not send_http_request(tester_url, {"Host": "random.hostname"})
+
+
+@pytest.mark.abort_on_fail
+async def test_gateway_round_robin(ops_test: OpsTest):
+
+    model = ops_test.model.name
+    istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
+    tester_url = f"http://{istio_ingress_address}/{model}-{IPA_TESTER}"
+    envoy_ids = fetch_envoy_peer_metadata_ids(tester_url, 9)
+    assert len(envoy_ids) == 3
+
+    await ops_test.model.applications[APP_NAME].scale(1)
+    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER], status="active", timeout=1000)
+    envoy_ids = fetch_envoy_peer_metadata_ids(tester_url, 9)
+    assert len(envoy_ids) == 1
 
 
 @pytest.fixture(scope="module")

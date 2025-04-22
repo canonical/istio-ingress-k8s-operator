@@ -14,6 +14,9 @@ from charms.tls_certificates_interface.v3.tls_certificates import (
 )
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.core_v1 import Secret
+from ops import ActiveStatus
+
+from charm import IstioIngressCharm
 
 
 def test_construct_gateway(istio_ingress_charm, istio_ingress_context):
@@ -343,3 +346,69 @@ def _get_listener_given_name(gateway, name: str):
         if listener["name"] == name:
             return listener
     raise KeyError(f"Listener with name {name} not found")
+
+
+def test_construct_hpa(istio_ingress_charm, istio_ingress_context):
+    """Assert that the HPA definition is constructed as expected."""
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(leader=True, planned_units=3),
+    ) as manager:
+        charm = manager.charm
+        hpa = charm._construct_hpa(charm.model.app.planned_units())
+        # Spot‑check metadata
+        assert hpa.metadata.name == charm.app.name
+        assert hpa.metadata.namespace == charm.model.name
+
+        # Spot‑check spec fields
+        spec = hpa.spec
+        assert spec.minReplicas == charm.model.app.planned_units()
+        assert spec.maxReplicas == charm.model.app.planned_units()
+
+        # Spot‑check scaleTargetRef
+        ref = spec.scaleTargetRef
+        assert ref.apiVersion == "apps/v1"
+        assert ref.kind == "Deployment"
+        assert ref.name == "istio-ingress-k8s-istio"
+
+
+@pytest.mark.parametrize("planned_units", [1, 3, 5])
+@patch.object(IstioIngressCharm, "_is_ready", return_value=True)
+@patch.object(IstioIngressCharm, "_setup_proxy_pebble_service")
+@patch.object(IstioIngressCharm, "_get_hpa_resource_manager")
+def test_sync_all_triggers_hpa_reconcile(
+    mock_get_hpa,
+    mock_setup_proxy,
+    mock_is_ready,
+    istio_ingress_charm,
+    istio_ingress_context,
+    planned_units,
+):
+    """Assert that HPA reconciliation is invoked at the end of _sync_all_resources."""
+    state = scenario.State(relations=[], leader=True, planned_units=planned_units)
+    out = istio_ingress_context.run(istio_ingress_context.on.config_changed(), state)
+
+    mock_get_hpa.assert_called_once()
+    manager = mock_get_hpa.return_value
+    manager.reconcile.assert_called_once()
+
+    resources = manager.reconcile.call_args[0][0]
+    assert len(resources) == 1
+    hpa = resources[0]
+    assert hpa.spec.minReplicas == hpa.spec.maxReplicas == planned_units
+
+    assert isinstance(out.unit_status, ActiveStatus)
+    assert out.unit_status.message.startswith("Serving at")
+
+
+@pytest.mark.parametrize("leader,call_count", [(True, 1), (False, 0)])
+@patch.object(IstioIngressCharm, "_get_hpa_resource_manager")
+def test_on_remove_hpa_deleted_only_if_leader(
+    mock_get_hpa, istio_ingress_charm, istio_ingress_context, leader, call_count
+):
+    """Assert that _on_remove() deletes the HPA only if the unit is leader."""
+    state = scenario.State(relations=[], leader=leader)
+    istio_ingress_context.run(istio_ingress_context.on.remove(), state)
+
+    manager = mock_get_hpa.return_value
+    assert manager.delete.call_count == call_count

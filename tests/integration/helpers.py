@@ -1,11 +1,13 @@
 import logging
+import re
 import ssl
-from typing import Any, Dict, Optional, cast
+from typing import Any, Dict, Optional, Set, cast
 from urllib.parse import urlparse
 
 import lightkube
 import requests
 from lightkube.generic_resource import create_namespaced_resource
+from lightkube.resources.autoscaling_v2 import HorizontalPodAutoscaler
 from lightkube.resources.core_v1 import ConfigMap, Service
 from pytest_operator.plugin import OpsTest
 from requests.adapters import DEFAULT_POOLBLOCK, DEFAULT_POOLSIZE, DEFAULT_RETRIES, HTTPAdapter
@@ -175,6 +177,26 @@ async def get_route_condition(ops_test: OpsTest, route_name: str) -> Optional[Di
         return None
 
 
+async def get_hpa(ops_test, hpa_name: str) -> Optional[HorizontalPodAutoscaler]:
+    """Retrieve the HPA resource so we can inspect .spec and .status directly.
+
+    Args:
+        ops_test: pytest-operator plugin
+        hpa_name: Name of the HPA resource.
+
+    Returns:
+        The HorizontalPodAutoscaler object or None if not found / on error.
+    """
+    model = ops_test.model.name
+    try:
+        c = lightkube.Client()
+
+        return c.get(HorizontalPodAutoscaler, namespace=model, name=hpa_name)
+    except Exception as e:
+        logger.error("Error retrieving HPA %s: %s", hpa_name, e, exc_info=True)
+        return None
+
+
 def dequote(s: str):
     if isinstance(s, str) and s.startswith('"') and s.endswith('"'):
         s = s[1:-1]
@@ -192,6 +214,30 @@ def send_http_request(url: str, headers: Optional[dict] = None) -> bool:
     """
     resp = requests.get(url=url, headers=headers)
     return resp.status_code == 200
+
+
+def fetch_envoy_peer_metadata_ids(
+    url: str,
+    attempts: int,
+) -> Set[str]:
+    """Send HTTP GETs to `url` multiple times and extract all unique X-Envoy-Peer-Metadata-Id values from the response bodies.
+
+    Args:
+        url: The full HTTP URL to hit (e.g., "http://1.2.3.4/app").
+        attempts: Number of requests to send.
+
+    Returns:
+        A set of distinct Envoy peer metadata IDs observed.
+    """
+    pattern = re.compile(r"^X-Envoy-Peer-Metadata-Id:\s*(.+)$", re.MULTILINE)
+    seen: Set[str] = set()
+    for _ in range(attempts):
+        resp = requests.get(url)
+        resp.raise_for_status()
+        match = pattern.search(resp.text)
+        if match:
+            seen.add(match.group(1).strip())
+    return seen
 
 
 def send_http_request_with_custom_ca(
