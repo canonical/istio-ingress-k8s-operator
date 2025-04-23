@@ -186,7 +186,7 @@ async def test_route_validity(
     tester_url = f"http://{istio_ingress_address}/{model}-{IPA_TESTER}"
 
     listener_condition = await get_listener_condition(ops_test, "istio-ingress-k8s")
-    route_condition = await get_route_condition(ops_test, f"{IPA_TESTER}-http")
+    route_condition = await get_route_condition(ops_test, f"{IPA_TESTER}-http-{APP_NAME}")
     listener_spec = await get_listener_spec(ops_test, "istio-ingress-k8s")
 
     assert listener_condition["attachedRoutes"] == 1
