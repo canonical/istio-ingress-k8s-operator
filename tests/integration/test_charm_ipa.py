@@ -102,7 +102,7 @@ async def test_scale(ops_test: OpsTest):
     await ops_test.model.applications[APP_NAME].scale(3)
     await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=1000)
 
-    hpa = await get_hpa(ops_test, f"{APP_NAME}-istio")
+    hpa = await get_hpa(ops_test, APP_NAME)
 
     assert hpa is not None
     assert hpa.spec.minReplicas == 3
