@@ -1,6 +1,7 @@
 # Copyright 2024 Canonical Ltd.
 # See LICENSE file for licensing details.
 
+import asyncio
 import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -233,7 +234,17 @@ async def test_gateway_round_robin(ops_test: OpsTest):
 
     await ops_test.model.applications[APP_NAME].scale(1)
     await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER], status="active", timeout=1000)
-    envoy_ids = fetch_envoy_peer_metadata_ids(tester_url, 9)
+
+    # Retry logic to wait for K8s to update the service endpoints
+    async def wait_for_envoy_count(expected_count, retries=10, delay=10):
+        for _ in range(retries):
+            envoy_ids = fetch_envoy_peer_metadata_ids(tester_url, 9)
+            if len(envoy_ids) == expected_count:
+                return envoy_ids
+            await asyncio.sleep(delay)
+        return fetch_envoy_peer_metadata_ids(tester_url, 9)  # Final fetch for assertion
+
+    envoy_ids = await wait_for_envoy_count(1)
     assert len(envoy_ids) == 1
 
 
