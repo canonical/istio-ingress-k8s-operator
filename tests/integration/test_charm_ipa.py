@@ -192,19 +192,18 @@ async def test_route_validity(
     await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER, IPA_TESTER_UNAUTHENTICATED], status="active", timeout=1000)
 
     model = ops_test.model.name
-    # TODO: FIX THIS
     istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
+
+    listener_condition = await get_listener_condition(ops_test, "istio-ingress-k8s")
+    listener_spec = await get_listener_spec(ops_test, "istio-ingress-k8s")
+
+    assert listener_condition["attachedRoutes"] == 2
+    assert listener_condition["conditions"][0]["message"] == "No errors found"
+    assert listener_condition["conditions"][0]["reason"] == "Accepted"
 
     for ipa_tester in [IPA_TESTER, IPA_TESTER_UNAUTHENTICATED]:
         tester_url = f"http://{istio_ingress_address}/{model}-{ipa_tester}"
-
-    listener_condition = await get_listener_condition(ops_test, "istio-ingress-k8s")
-    route_condition = await get_route_condition(ops_test, f"{IPA_TESTER}-http-{APP_NAME}")
-    listener_spec = await get_listener_spec(ops_test, "istio-ingress-k8s")
-
-        assert listener_condition["attachedRoutes"] == 1
-        assert listener_condition["conditions"][0]["message"] == "No errors found"
-        assert listener_condition["conditions"][0]["reason"] == "Accepted"
+        route_condition = await get_route_condition(ops_test, f"{ipa_tester}-http-{APP_NAME}")
 
         assert route_condition["conditions"][0]["message"] == "Route was valid"
         assert route_condition["conditions"][0]["reason"] == "Accepted"
