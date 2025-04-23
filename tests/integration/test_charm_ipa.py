@@ -243,7 +243,7 @@ async def test_gateway_round_robin(ops_test: OpsTest):
     envoy_ids = fetch_envoy_peer_metadata_ids(tester_url, 9)
     assert len(envoy_ids) == 3
 
-    await ops_test.model.applications[APP_NAME].scale(1)
+    await ops_test.model.applications[APP_NAME].scale(scale_change=-2)
     await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER], status="active", timeout=1000)
 
     # Retry logic to wait for K8s to update the service endpoints
