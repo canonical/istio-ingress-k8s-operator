@@ -789,11 +789,13 @@ class IstioIngressCharm(CharmBase):
         """
         # {key: {"handler": relation_handler, "routes": [RouteInfo]}}
         application_route_data = {}
+
+        # Presently, each relation endpoint supports a single relation handler, so we can just look it up.
+        # But in future if we support ingress v2 and v3 simultaneously, we'd need to include in the below loop something
+        # to inspect each related app and choose a handler.
+        relation_handler = self.ingress_relation_handlers[relation_name]
+
         for rel in self.model.relations[relation_name]:
-            # Figure out which relation handler can work.
-            # Presently, each relation endpoint supports a single relation handler, so we can just look it up.
-            # But in future if we support ingress v2 and v3 we'd need to determine this somehow else.
-            relation_handler = self.ingress_relation_handlers[relation_name]
             key = rel.app.name
             if key not in application_route_data:
                 application_route_data[key] = {"handler": relation_handler, "routes": []}
@@ -803,14 +805,13 @@ class IstioIngressCharm(CharmBase):
                 continue
 
             data = relation_handler.get_data(rel)
-            # strip_prefix = None equates to False
-            data.app.strip_prefix = data.app.strip_prefix or False
             application_route_data[key]["routes"].append(
                 RouteInfo(
                     service_name=data.app.name,
                     namespace=data.app.model,
                     port=data.app.port,
-                    strip_prefix=data.app.strip_prefix,
+                    # For data.app.strip_prefix, an omitted value (None) equates to False
+                    strip_prefix=data.app.strip_prefix or False,
                     prefix=self._generate_default_path(data.app.name, data.app.model),
                 )
             )
@@ -822,22 +823,18 @@ class IstioIngressCharm(CharmBase):
         for (app_name, relation_name), this_route_data in route_data.items():
             relation_handler = this_route_data["handler"]
             routes = this_route_data["routes"]
-            if len(routes) > 1:
-                # This is unsupported and should never happen, but just in case.
-                logger.error(
-                    f"Cannot publish routes to {app_name} in {relation_name} because there are too many routes."
-                    f"  Expected <=1 route, got {routes}"
-                )
-                rel = get_relation_by_name_and_app(self.model.relations[relation_name], app_name)
-                relation_handler.wipe_ingress_data(rel)
-                continue
-
-            if len(routes) == 0:
-                rel = get_relation_by_name_and_app(self.model.relations[relation_name], app_name)
-                relation_handler.wipe_ingress_data(rel)
-                continue
-
             rel = get_relation_by_name_and_app(self.model.relations[relation_name], app_name)
+
+            if len(routes) != 1:
+                if len(routes) > 1:
+                    # This is unsupported and should never happen, but just in case.
+                    logger.error(
+                        f"Cannot publish routes to {app_name} in {relation_name} because there are too many routes."
+                        f"  Expected <=1 route, got {routes}"
+                    )
+                relation_handler.wipe_ingress_data(rel)
+                continue
+
             relation_handler.publish_url(rel, ingress_url + routes[0]["prefix"])
 
     def _publish_to_istio_ingress_config_relation(self, decisions_address: Optional[str]):

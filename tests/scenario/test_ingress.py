@@ -12,16 +12,6 @@ from models import HTTPRouteFilterType
 from tests.scenario.test_gateway import generate_certificates_relation
 
 
-@pytest.fixture()
-def mock_ingress_requirer_data():
-    mock_ingress_requirer_data = MagicMock()
-    mock_ingress_requirer_data.app.name = "app-name"
-    mock_ingress_requirer_data.app.model = "app-namespace"
-    mock_ingress_requirer_data.app.port = 80
-    mock_ingress_requirer_data.app.strip_prefix = True
-    return mock_ingress_requirer_data
-
-
 @pytest.mark.parametrize(
     "strip_prefix, filters",
     [
