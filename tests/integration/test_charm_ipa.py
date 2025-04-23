@@ -108,7 +108,18 @@ async def test_scale(ops_test: OpsTest):
     assert hpa is not None
     assert hpa.spec.minReplicas == 3
     assert hpa.spec.maxReplicas == 3
-    assert hpa.status.currentReplicas == 3
+
+    async def wait_for_current_replicas(expected_replicas, retries=10, delay=10):
+        for _ in range(retries):
+            hpa = await get_hpa(ops_test, APP_NAME)
+            if hpa.status.currentReplicas == expected_replicas:
+                return True
+            await asyncio.sleep(delay)
+        return False
+
+    assert await wait_for_current_replicas(
+        3
+    ), f"Expected currentReplicas to be 3, got {hpa.status.currentReplicas}"
 
 
 @pytest.mark.abort_on_fail
