@@ -355,17 +355,15 @@ def test_construct_hpa(istio_ingress_charm, istio_ingress_context):
         state=scenario.State(leader=True, planned_units=3),
     ) as manager:
         charm = manager.charm
+
         hpa = charm._construct_hpa(charm.model.app.planned_units())
-        # Spot‑check metadata
         assert hpa.metadata.name == charm.app.name
         assert hpa.metadata.namespace == charm.model.name
 
-        # Spot‑check spec fields
         spec = hpa.spec
         assert spec.minReplicas == charm.model.app.planned_units()
         assert spec.maxReplicas == charm.model.app.planned_units()
 
-        # Spot‑check scaleTargetRef
         ref = spec.scaleTargetRef
         assert ref.apiVersion == "apps/v1"
         assert ref.kind == "Deployment"
@@ -385,20 +383,22 @@ def test_sync_all_triggers_hpa_reconcile(
     planned_units,
 ):
     """Assert that HPA reconciliation is invoked at the end of _sync_all_resources."""
+    mock_manager = mock_get_hpa.return_value
     state = scenario.State(relations=[], leader=True, planned_units=planned_units)
-    out = istio_ingress_context.run(istio_ingress_context.on.config_changed(), state)
+
+    result = istio_ingress_context.run(istio_ingress_context.on.config_changed(), state)
 
     mock_get_hpa.assert_called_once()
-    manager = mock_get_hpa.return_value
-    manager.reconcile.assert_called_once()
+    mock_manager.reconcile.assert_called_once()
 
-    resources = manager.reconcile.call_args[0][0]
-    assert len(resources) == 1
-    hpa = resources[0]
-    assert hpa.spec.minReplicas == hpa.spec.maxReplicas == planned_units
+    hpa_list = mock_manager.reconcile.call_args.args[0]
+    assert len(hpa_list) == 1
+    hpa = hpa_list[0]
+    assert hpa.spec.minReplicas == planned_units
+    assert hpa.spec.maxReplicas == planned_units
 
-    assert isinstance(out.unit_status, ActiveStatus)
-    assert out.unit_status.message.startswith("Serving at")
+    assert isinstance(result.unit_status, ActiveStatus)
+    assert result.unit_status.message.startswith("Serving at")
 
 
 @pytest.mark.parametrize("leader,call_count", [(True, 1), (False, 0)])
