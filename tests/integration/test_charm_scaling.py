@@ -72,7 +72,7 @@ async def test_gateway_scaling(ops_test: OpsTest, n_units):
 
     Note: This test is stateful and will leave the deployment at a scale of 2.
     """
-    await ops_test.model.applications[APP_NAME].scale(3)
+    await ops_test.model.applications[APP_NAME].scale(n_units)
     await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=1000)
 
     hpa = await get_hpa(ops_test.model.name, APP_NAME)
