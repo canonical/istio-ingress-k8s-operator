@@ -10,7 +10,6 @@ from typing import Optional
 import pytest
 import yaml
 from helpers import get_hpa
-from juju.unit import Unit
 from pytest_operator.plugin import OpsTest
 
 logger = logging.getLogger(__name__)
@@ -49,20 +48,6 @@ async def test_deploy_dependencies(ops_test: OpsTest):
         timeout=1000,
     )
 
-    # Deploy ipa-tester
-    await ops_test.model.deploy(
-        ipa_tester_charm,
-        application_name=IPA_TESTER,
-        resources={"echo-server-image": "jmalloc/echo-server:v0.3.7"},
-    ),
-    await ops_test.model.wait_for_idle(
-        [
-            IPA_TESTER,
-        ],
-        status="active",
-        timeout=1000,
-    )
-
 
 @pytest.mark.abort_on_fail
 async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
@@ -80,7 +65,7 @@ async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
         3,
         # Scale down to 2
         2,
-    )
+    ),
 )
 async def test_gateway_scaling(ops_test: OpsTest, n_units):
     """Tests that, when the application is scaled, the HPA managing replicas on the Gateway is scaled too.
@@ -93,15 +78,17 @@ async def test_gateway_scaling(ops_test: OpsTest, n_units):
     hpa = await get_hpa(ops_test.model.name, APP_NAME)
 
     assert hpa is not None
-    assert hpa.spec.minReplicas == 3
-    assert hpa.spec.maxReplicas == 3
+    assert hpa.spec.minReplicas == n_units
+    assert hpa.spec.maxReplicas == n_units
 
     assert await wait_for_hpa_current_replicas(
-        ops_test.model.name, APP_NAME, 3
-    ), f"Expected currentReplicas to be 3, got {hpa.status.currentReplicas}"
+        ops_test.model.name, APP_NAME, n_units
+    ), f"Expected currentReplicas to be {n_units}, got {hpa.status.currentReplicas}"
 
 
-async def wait_for_hpa_current_replicas(namespace, hpa_name, expected_replicas, retries=10, delay=10):
+async def wait_for_hpa_current_replicas(
+    namespace, hpa_name, expected_replicas, retries=10, delay=10
+):
     for _ in range(retries):
         hpa = await get_hpa(namespace, hpa_name)
         if hpa.status.currentReplicas == expected_replicas:

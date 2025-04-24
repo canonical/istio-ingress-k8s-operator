@@ -331,10 +331,22 @@ class IstioIngressCharm(CharmBase):
         self._sync_all_resources()
 
     def _on_remove(self, _):
-        """Event handler for remove."""
+        """Event handler for remove.
+
+        The objective of this handler is to remove all application-scoped resources when the application is being scaled
+        to 0 or removed.  We intentionally do not put this removal action behind a leader guard (eg, behind
+        `if self.unit.is_leader()`) for the reasons discussed
+        [here](https://github.com/canonical/istio-ingress-k8s-operator/issues/16).
+        """
         # if there are still units left, skip removal
         if self.model.app.planned_units() > 0:
+            logger.info(
+                "Handling remove event: skipping resource removal because application is not scaling to 0."
+            )
             return
+        logger.info(
+            "Handling remove event: Attempting to remove application resources because application is scaling to 0."
+        )
 
         # Removing tailing ingresses
         kim = self._get_ingress_route_resource_manager()
@@ -898,25 +910,24 @@ class IstioIngressCharm(CharmBase):
 
     def _sync_gateway_resources(self):
         unit_count = self.model.app.planned_units()
-
-        # if there are no units left (unit_count < 1), skip reconcile:
-        #  - we assume this is a remove event and the remove hook will clean everything up
-        #  - updating the HPA with zero replicas is invalid
-        if unit_count < 1:
-            return
-
         krm = self._get_gateway_resource_manager()
         resources_list = []
         tls_secret_name = None
 
-        if secret := self._construct_gateway_tls_secret():
-            resources_list.append(secret)
-            if secret.metadata is None:
-                raise ValueError("Unexpected error: secret.metadata is None")
-            tls_secret_name = secret.metadata.name
+        # Skip reconciliation if no units are left (unit_count < 1):
+        #  - This typically indicates an application removal event; we rely on the remove hook for cleanup.
+        #  - Attempting to reconcile with an HPA that sets replicas to zero is invalid.
+        #  - This guard exists because some events can call _sync_all_resources before the remove hook runs,
+        #    leading to k8s validation webhook errors when planned_units is 0.
+        if unit_count > 0:
+            if secret := self._construct_gateway_tls_secret():
+                resources_list.append(secret)
+                if secret.metadata is None:
+                    raise ValueError("Unexpected error: secret.metadata is None")
+                tls_secret_name = secret.metadata.name
 
-        resources_list.append(self._construct_gateway(tls_secret_name=tls_secret_name))
-        resources_list.append(self._construct_hpa(unit_count))
+            resources_list.append(self._construct_gateway(tls_secret_name=tls_secret_name))
+            resources_list.append(self._construct_hpa(unit_count))
 
         krm.reconcile(resources_list)
 
