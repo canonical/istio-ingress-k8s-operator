@@ -500,7 +500,7 @@ class IstioIngressCharm(CharmBase):
     def _construct_httproute(self, data: IngressRequirerData, prefix: str, section_name: str):
         http_route = HTTPRouteResource(
             metadata=Metadata(
-                name=data.app.name + "-" + section_name,
+                name=data.app.name + "-" + section_name + "-" + self.app.name,
                 namespace=data.app.model,
             ),
             spec=HTTPRouteResourceSpec(
@@ -617,7 +617,7 @@ class IstioIngressCharm(CharmBase):
     ):
         http_route = HTTPRouteResource(
             metadata=Metadata(
-                name=data.app.name + "-" + section_name,
+                name=data.app.name + "-" + section_name + "-" + self.app.name,
                 namespace=data.app.model,
             ),
             spec=HTTPRouteResourceSpec(
