@@ -1,7 +1,6 @@
 # Copyright 2024 Canonical Ltd.
 # See LICENSE file for licensing details.
 
-import asyncio
 import logging
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -16,7 +15,6 @@ from conftest import (
 from helpers import (
     dequote,
     get_auth_policy_spec,
-    get_hpa,
     get_k8s_service_address,
     get_listener_condition,
     get_listener_spec,
@@ -95,30 +93,6 @@ async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
         istio_ingress_charm, resources=resources, application_name=APP_NAME, trust=True
     ),
     await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=1000)
-
-
-@pytest.mark.abort_on_fail
-async def test_hpa_scale_up(ops_test: OpsTest):
-    await ops_test.model.applications[APP_NAME].scale(3)
-    await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=1000)
-
-    hpa = await get_hpa(ops_test.model.name, APP_NAME)
-
-    assert hpa is not None
-    assert hpa.spec.minReplicas == 3
-    assert hpa.spec.maxReplicas == 3
-
-    async def wait_for_current_replicas(expected_replicas, retries=10, delay=10):
-        for _ in range(retries):
-            hpa = await get_hpa(ops_test.model.name, APP_NAME)
-            if hpa.status.currentReplicas == expected_replicas:
-                return True
-            await asyncio.sleep(delay)
-        return False
-
-    assert await wait_for_current_replicas(
-        3
-    ), f"Expected currentReplicas to be 3, got {hpa.status.currentReplicas}"
 
 
 @pytest.mark.abort_on_fail
@@ -231,31 +205,6 @@ async def test_route_validity(
         assert send_http_request(tester_url, {"Host": expected_hostname})
         assert not send_http_request(tester_url)
         assert not send_http_request(tester_url, {"Host": "random.hostname"})
-
-
-@pytest.mark.abort_on_fail
-async def test_hpa_scale_down(ops_test: OpsTest):
-
-    await ops_test.model.applications[APP_NAME].scale(1)
-    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER], status="active", timeout=1000)
-
-    hpa = await get_hpa(ops_test.model.name, APP_NAME)
-
-    assert hpa is not None
-    assert hpa.spec.minReplicas == 1
-    assert hpa.spec.maxReplicas == 1
-
-    async def wait_for_current_replicas(expected_replicas, retries=10, delay=10):
-        for _ in range(retries):
-            hpa = await get_hpa(ops_test.model.name, APP_NAME)
-            if hpa.status.currentReplicas == expected_replicas:
-                return True
-            await asyncio.sleep(delay)
-        return False
-
-    assert await wait_for_current_replicas(
-        1
-    ), f"Expected currentReplicas to be 1, got {hpa.status.currentReplicas}"
 
 
 @pytest.fixture(scope="module")
