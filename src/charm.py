@@ -4,11 +4,11 @@
 # See LICENSE file for licensing details.
 
 """Istio Ingress Charm."""
-
 import logging
 import re
 import time
-from typing import Any, Dict, Optional, cast
+from collections import defaultdict
+from typing import Dict, List, Optional, TypedDict, cast
 from urllib.parse import urlparse
 
 from charms.istio_k8s.v0.istio_ingress_config import IngressConfigProvider
@@ -18,7 +18,6 @@ from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.tempo_coordinator_k8s.v0.charm_tracing import trace_charm
 from charms.tempo_coordinator_k8s.v0.tracing import TracingEndpointRequirer
 from charms.traefik_k8s.v2.ingress import IngressPerAppProvider as IPAv2
-from charms.traefik_k8s.v2.ingress import IngressRequirerData
 from lightkube.core.client import Client
 from lightkube.core.exceptions import ApiError
 from lightkube.generic_resource import create_namespaced_resource
@@ -37,7 +36,6 @@ from ops.charm import CharmBase
 from ops.model import ActiveStatus, MaintenanceStatus
 from ops.pebble import ChangeError, Layer
 
-# from lightkube.models.meta_v1 import Patch
 from models import (
     Action,
     AllowedRoutes,
@@ -100,6 +98,7 @@ INGRESS_RESOURCE_TYPES = {
     RESOURCE_TYPES["ReferenceGrant"],
     RESOURCE_TYPES["HTTPRoute"],
 }
+INGRESS_AUTHENTICATED_NAME = "ingress"
 AUTHORIZATION_POLICY_RESOURCE_TYPES = {RESOURCE_TYPES["AuthorizationPolicy"]}
 
 GATEWAY_SCOPE = "istio-gateway"
@@ -129,6 +128,16 @@ class RefreshCerts(EventBase):
     """Event raised when the charm wants the certs to be refreshed."""
 
 
+class RouteInfo(TypedDict):
+    """Class to hold route information."""
+
+    service_name: str
+    namespace: str
+    port: int
+    strip_prefix: bool
+    prefix: Optional[str]
+
+
 @trace_charm(
     tracing_endpoint="_charm_tracing_endpoint",
     extra_types=[
@@ -145,13 +154,19 @@ class IstioIngressCharm(CharmBase):
         # Add a custom event that we can emit to request a cert refresh
         self.on.define_event("refresh_certs", RefreshCerts)
 
-        self._external_host_ = None
+        self._ingress_url_ = None
 
         self.managed_name = f"{self.app.name}-istio"
         self._lightkube_field_manager: str = self.app.name
         self._lightkube_client = None
 
-        self.ingress_per_appv2 = IPAv2(charm=self)
+        # Map of ingress_relation_name to the handler that manages that relation
+        self.ingress_relation_handlers = {
+            INGRESS_AUTHENTICATED_NAME: IPAv2(
+                charm=self,
+                relation_name=INGRESS_AUTHENTICATED_NAME,
+            ),
+        }
         self.telemetry_labels = {
             f"charms.canonical.com/{self.model.name}.{self.app.name}.telemetry": "aggregated"
         }
@@ -174,12 +189,11 @@ class IstioIngressCharm(CharmBase):
         self.framework.observe(self.forward_auth.on.auth_config_changed, self._handle_auth_config)
         self.framework.observe(self.forward_auth.on.auth_config_removed, self._handle_auth_config)
         self.framework.observe(self.on.remove, self._on_remove)
-        self.framework.observe(
-            self.ingress_per_appv2.on.data_provided, self._on_ingress_data_provided
-        )
-        self.framework.observe(
-            self.ingress_per_appv2.on.data_removed, self._on_ingress_data_removed
-        )
+        for relation_handler in self.ingress_relation_handlers.values():
+            self.framework.observe(
+                relation_handler.on.data_provided, self._on_ingress_data_provided
+            )
+            self.framework.observe(relation_handler.on.data_removed, self._on_ingress_data_removed)
         self.framework.observe(
             self.on.metrics_proxy_pebble_ready, self._metrics_proxy_pebble_ready
         )
@@ -195,7 +209,7 @@ class IstioIngressCharm(CharmBase):
 
         # During the initialisation of the charm, we do not have a LoadBalancer and thus a LoadBalancer external IP.
         # If we need that IP to request the certs, disable cert handling until we have it.
-        if (external_hostname := self._external_host) is None:
+        if (external_hostname := self._ingress_url) is None:
             logger.debug(
                 "External hostname is not set and no load balancer ip available.  TLS certificate generation disabled"
             )
@@ -263,7 +277,7 @@ class IstioIngressCharm(CharmBase):
             logger=logger,
         )
 
-    def _get_ingress_resource_manager(self):
+    def _get_ingress_route_resource_manager(self):
         return KubernetesResourceManager(
             labels=create_charm_default_labels(
                 self.app.name, self.model.name, scope=INGRESS_SCOPE
@@ -324,7 +338,7 @@ class IstioIngressCharm(CharmBase):
             return
 
         # Removing tailing ingresses
-        kim = self._get_ingress_resource_manager()
+        kim = self._get_ingress_route_resource_manager()
         kim.delete()
 
         self._remove_gateway_resources()
@@ -444,7 +458,7 @@ class IstioIngressCharm(CharmBase):
                                    gateway will be configured to use TLS with this secret for the certificates.
         """
         allowed_routes = AllowedRoutes(namespaces={"from": "All"})
-        hostname = self._external_host if self._is_valid_hostname(self._external_host) else None
+        hostname = self._ingress_url if self._is_valid_hostname(self._ingress_url) else None
         listeners = [
             Listener(
                 name="http",
@@ -486,11 +500,19 @@ class IstioIngressCharm(CharmBase):
             spec=gateway.spec.model_dump(exclude_none=True),
         )
 
-    def _construct_httproute(self, data: IngressRequirerData, prefix: str, section_name: str):
+    def _construct_httproute(
+        self,
+        service_name: str,
+        namespace: str,
+        port: int,
+        strip_prefix: bool,
+        prefix: str,
+        section_name: str,
+    ):
         http_route = HTTPRouteResource(
             metadata=Metadata(
-                name=data.app.name + "-" + section_name + "-" + self.app.name,
-                namespace=data.app.model,
+                name=service_name + "-" + section_name + "-" + self.app.name,
+                namespace=namespace,
             ),
             spec=HTTPRouteResourceSpec(
                 parentRefs=[
@@ -505,9 +527,9 @@ class IstioIngressCharm(CharmBase):
                         matches=[Match(path=PathMatch(value=prefix))],
                         backendRefs=[
                             BackendRef(
-                                name=data.app.name,
-                                port=data.app.port,
-                                namespace=data.app.model,
+                                name=service_name,
+                                port=port,
+                                namespace=namespace,
                             )
                         ],
                         filters=(
@@ -517,7 +539,7 @@ class IstioIngressCharm(CharmBase):
                                     urlRewrite=HTTPURLRewriteFilter(),
                                 )
                             ]
-                            if data.app.strip_prefix
+                            if strip_prefix
                             else []
                         ),
                     )
@@ -533,18 +555,21 @@ class IstioIngressCharm(CharmBase):
             spec=http_route.spec.model_dump(exclude_none=True),
         )
 
-    def _construct_ingress_auth_policy(self, data: IngressRequirerData):
-
+    def _construct_auth_policy_from_ingress_to_target(
+        self, target_name: str, target_namespace: str, target_port: int
+    ):
+        """Return an AuthorizationPolicy that allows the ingress workload to communicate with the target workload."""
         auth_policy = AuthorizationPolicyResource(
             metadata=Metadata(
-                name=data.app.name + "-" + self.app.name + "-" + data.app.model + "-l4",
-                namespace=data.app.model,
+                name=target_name + "-" + self.app.name + "-" + target_namespace + "-l4",
+                namespace=target_namespace,
             ),
             spec=AuthorizationPolicySpec(
                 rules=[
                     AuthRule(
-                        to=[To(operation=Operation(ports=[str(data.app.port)]))],
-                        from_=[  # type: ignore # this is accessible via an alias
+                        to=[To(operation=Operation(ports=[str(target_port)]))],
+                        from_=[  # type: ignore # this is accessible via an alias "from"
+                            # The ServiceAccount that is used to deploy the Gateway (ingress) workload
                             From(
                                 source=Source(
                                     principals=[
@@ -557,7 +582,7 @@ class IstioIngressCharm(CharmBase):
                         ],
                     )
                 ],
-                selector=WorkloadSelector(matchLabels={"app.kubernetes.io/name": data.app.name}),
+                selector=WorkloadSelector(matchLabels={"app.kubernetes.io/name": target_name}),
                 action=Action.allow,
             ),
         )
@@ -602,12 +627,12 @@ class IstioIngressCharm(CharmBase):
         )
 
     def _construct_redirect_to_https_httproute(
-        self, data: IngressRequirerData, prefix: str, section_name: str
+        self, app_name: str, model: str, prefix: str, section_name: str
     ):
         http_route = HTTPRouteResource(
             metadata=Metadata(
-                name=data.app.name + "-" + section_name + "-" + self.app.name,
-                namespace=data.app.model,
+                name=app_name + "-" + section_name + "-" + self.app.name,
+                namespace=model,
             ),
             spec=HTTPRouteResourceSpec(
                 parentRefs=[
@@ -662,17 +687,22 @@ class IstioIngressCharm(CharmBase):
         * Check authentication configuration.
         * Publish or clear the auth_decisions_address in ingress-config, if related.
         * If auth relation exists but no decisions address, set to blocked and remove gateway.
+        * Fetch route information from the ingress relation
         * Synchronize external authorization configuration.
             - If missing valid ingress-config relation when auth is provided, set to blocked and remove gateway.
         * Reconcile HPA and gateway resources to align replicas with unit count and ensure gateway readiness.
         * Validate the external hostname.
-        * Synchronize ingress resources and set up the proxy service.
+        * Synchronize ingress resources
+        * Publish route information to ingressed applications
+        * Set up the proxy service
         * Update forward auth relation data with ingressed apps.
         * Request certificate inspection.
         """
+
         if not self.unit.is_leader():
             self.unit.status = ActiveStatus("Backup unit; standing by for leader takeover")
             return
+
         # Check authentication configuration.
         auth_decisions_address = self._get_oauth_decisions_address()
 
@@ -688,6 +718,12 @@ class IstioIngressCharm(CharmBase):
             self._remove_gateway_resources()
             return
 
+        # Construct route information from the ingress relation
+        application_route_data = self._get_routes()
+        deduplicate_app_route_data(application_route_data)
+        # TODO: Capture a BlockedStatus here if there's duplicates
+        #  (https://github.com/canonical/istio-ingress-k8s-operator/issues/57)
+
         # Synchronize external authorization configuration.
         if not self.ingress_config.is_ready() and auth_decisions_address:
             self.unit.status = BlockedStatus(
@@ -698,34 +734,47 @@ class IstioIngressCharm(CharmBase):
         self._sync_ext_authz_auth_policy(auth_decisions_address)
 
         # Reconcile HPA and gateway resources
+
         self._sync_gateway_resources()
         self.unit.status = MaintenanceStatus("Validating gateway readiness")
         if not self._is_ready():
             return
 
         # Validate external hostname.
-        if not self._external_host:
+        if not self._ingress_url:
             self.unit.status = BlockedStatus(
                 "Invalid hostname provided, Please ensure this adheres to RFC 1123."
             )
             return
 
-        # Synchronize ingress resources and set up the proxy service.
+        # Synchronize ingress resources
         try:
-            self._sync_ingress_resources()
-            self._setup_proxy_pebble_service()
-            self.unit.status = ActiveStatus(f"Serving at {self._external_host}")
-        except (DataValidationError, ApiError) as e:
+            # Extract just a list of the routes to be created
+            routes_to_create = [
+                route
+                for route_data in application_route_data.values()
+                for route in route_data["routes"]
+            ]
+            self._sync_ingress_resources(routes=routes_to_create)
+        except ApiError as e:
             logger.error("Ingress sync failed: %s", e)
             self.unit.status = BlockedStatus("Issue with setting up an ingress")
             return
 
+        # Publish route information to ingressed applications
+        self._publish_routes_to_ingressed_applications(application_route_data)
+
+        # Set up the proxy service.
+        self._setup_proxy_pebble_service()
+
         # Update forward auth relation data with ingressed apps.
         if self.model.get_relation(FORWARD_AUTH_RELATION):
-            ingressed_apps = list(self.ingress_per_appv2.proxied_endpoints.keys())
+            ingressed_apps = [app for app, _ in application_route_data.keys()]
             self.forward_auth.update_requirer_relation_data(
                 ForwardAuthRequirerConfig(ingress_app_names=ingressed_apps)
             )
+
+        self.unit.status = ActiveStatus(f"Serving at {self._ingress_url}")
 
         # Request certificate inspection.
         # Request a cert refresh in case configuration has changed
@@ -751,6 +800,81 @@ class IstioIngressCharm(CharmBase):
             return None
 
         return auth_info.decisions_address
+
+    def _get_routes(self):
+        """Return the routes requested by all applications on all ingress relations, and associated relation_handlers.
+
+        Returns:
+            A dict mapping (app_name, relation_name): {"handler": relation_handler, "routes": routes}, where
+            relation_handler is a valid serializer and deserializer for this (app_name, relation_name)'s relation data.
+        """
+        routes = {}
+        for relation_name in self.ingress_relation_handlers.keys():
+            for app_name, app_route_data in self._get_routes_from_ingress(relation_name).items():
+                route_key = (app_name, relation_name)
+                routes[route_key] = app_route_data
+
+        return routes
+
+    def _get_routes_from_ingress(self, relation_name: str):
+        """Retrieve all routes from the given relation, and associated relation_handlers.
+
+        Args:
+            relation_name: The name of the ingress relation.
+
+        Returns:
+            A dict of {app_name: {"handler": relation_handler, "routes": List[RouteInfo])}.  In the case where a related
+            app has not provided any data yet, [RouteInfo] will be an empty list.
+        """
+        # {key: {"handler": relation_handler, "routes": [RouteInfo]}}
+        application_route_data = {}
+
+        # Presently, each relation endpoint supports a single relation handler, so we can just look it up.
+        # But in future if we support ingress v2 and v3 simultaneously, we'd need to include in the below loop something
+        # to inspect each related app and choose a handler.
+        relation_handler = self.ingress_relation_handlers[relation_name]
+
+        for rel in self.model.relations[relation_name]:
+            key = rel.app.name
+            if key not in application_route_data:
+                application_route_data[key] = {"handler": relation_handler, "routes": []}
+
+            if not rel.active or not relation_handler.is_ready(rel):
+                # No active routes for this related application
+                continue
+
+            data = relation_handler.get_data(rel)
+            application_route_data[key]["routes"].append(
+                RouteInfo(
+                    service_name=data.app.name,
+                    namespace=data.app.model,
+                    port=data.app.port,
+                    # For data.app.strip_prefix, an omitted value (None) equates to False
+                    strip_prefix=data.app.strip_prefix or False,
+                    prefix=self._generate_default_path(data.app.name, data.app.model),
+                )
+            )
+        return application_route_data
+
+    def _publish_routes_to_ingressed_applications(self, route_data):
+        """Update the ingress relation for all routes."""
+        ingress_url = self._ingress_url_with_scheme()
+        for (app_name, relation_name), this_route_data in route_data.items():
+            relation_handler = this_route_data["handler"]
+            routes = this_route_data["routes"]
+            rel = get_relation_by_name_and_app(self.model.relations[relation_name], app_name)
+
+            if len(routes) != 1:
+                if len(routes) > 1:
+                    # This is unsupported and should never happen, but just in case.
+                    logger.error(
+                        f"Cannot publish routes to {app_name} in {relation_name} because there are too many routes."
+                        f"  Expected <=1 route, got {routes}"
+                    )
+                relation_handler.wipe_ingress_data(rel)
+                continue
+
+            relation_handler.publish_url(rel, ingress_url + routes[0]["prefix"])
 
     def _publish_to_istio_ingress_config_relation(self, decisions_address: Optional[str]):
         if not decisions_address:
@@ -803,7 +927,7 @@ class IstioIngressCharm(CharmBase):
         # when we omit a field like hostname from the patch, apply does not remove the existing value
         # it assumes that the omission means "do not change this field," not "delete this field."
         # also worth noting that setting the value to None to remove it will result into a validation webhook error firing from k8s side
-        if not self._is_valid_hostname(self._external_host):
+        if not self._is_valid_hostname(self._ingress_url):
             self._remove_hostname_if_present()
 
     def _remove_hostname_if_present(self):
@@ -834,73 +958,84 @@ class IstioIngressCharm(CharmBase):
         except ApiError:
             return
 
-    def _sync_ingress_resources(self):
-        current_ingresses = []
-        current_policies = []
-        relation_mappings = {}
+    def _sync_ingress_resources(self, routes: List[RouteInfo]):
+        """Synchronize the ingress resources to reflect the desired routes."""
         if not self.unit.is_leader():
             raise RuntimeError("Ingress can only be provided on the leader unit.")
 
-        krm = self._get_ingress_resource_manager()
-        kam = self._get_ingress_auth_policy_resource_manager()
+        httproutes = []
+        ingress_to_workload_authorization_policies = []
 
         # If we can construct a gateway Secret, TLS is enabled so we should configure the routes accordingly
         is_tls_enabled = self._construct_gateway_tls_secret() is not None
 
-        for rel in self.model.relations["ingress"]:
+        for route in routes:
+            if not route["prefix"]:
+                # This should never happen
+                raise RuntimeError(f"Missing prefix in route: {route}")
 
-            if not self.ingress_per_appv2.is_ready(rel):
-                self.ingress_per_appv2.wipe_ingress_data(rel)
-                continue
-
-            data = self.ingress_per_appv2.get_data(rel)
-            prefix = self._generate_prefix(data.app.model_dump(by_alias=True))
-            ingress_resources_to_append = []
-            ingress_policies_to_append = []
             if is_tls_enabled:
                 # TLS is configured, so we enable HTTPS route and redirect HTTP to HTTPS
-                ingress_resources_to_append.append(
-                    self._construct_redirect_to_https_httproute(data, prefix, section_name="http")
+                httproutes.append(
+                    self._construct_redirect_to_https_httproute(
+                        app_name=route["service_name"],
+                        model=route["namespace"],
+                        prefix=route["prefix"],
+                        section_name="http",
+                    )
                 )
-                ingress_resources_to_append.append(
-                    self._construct_httproute(data, prefix, section_name="https")
+                httproutes.append(
+                    self._construct_httproute(
+                        service_name=route["service_name"],
+                        namespace=route["namespace"],
+                        port=route["port"],
+                        strip_prefix=route["strip_prefix"],
+                        prefix=route["prefix"],
+                        section_name="https",
+                    )
                 )
             else:
                 # Else, we enable only an HTTP route
-                ingress_resources_to_append.append(
-                    self._construct_httproute(data, prefix, section_name="http")
+                httproutes.append(
+                    self._construct_httproute(
+                        service_name=route["service_name"],
+                        namespace=route["namespace"],
+                        port=route["port"],
+                        strip_prefix=route["strip_prefix"],
+                        prefix=route["prefix"],
+                        section_name="http",
+                    )
                 )
 
-            ingress_policies_to_append.append(self._construct_ingress_auth_policy(data))
+            ingress_to_workload_authorization_policies.append(
+                self._construct_auth_policy_from_ingress_to_target(
+                    target_name=route["service_name"],
+                    target_namespace=route["namespace"],
+                    target_port=route["port"],
+                )
+            )
 
-            if rel.active:
-                current_ingresses.extend(ingress_resources_to_append)
-                current_policies.extend(ingress_policies_to_append)
-                external_url = self._generate_external_url(prefix)
-                relation_mappings[rel] = external_url
+        krm = self._get_ingress_route_resource_manager()
+        kam = self._get_ingress_auth_policy_resource_manager()
+        krm.reconcile(httproutes)
+        kam.reconcile(ingress_to_workload_authorization_policies)
 
-        try:
-            krm.reconcile(current_ingresses)
-            kam.reconcile(current_policies)
-            for relation, url in relation_mappings.items():
-                self.ingress_per_appv2.wipe_ingress_data(relation)
-                logger.debug(f"Publishing external URL for {relation.app.name}: {url}")
-                self.ingress_per_appv2.publish_url(relation, url)
+    def _ingress_url_with_scheme(self) -> str:
+        """Return the url to the ingress managed by this charm, including scheme.
 
-        except ApiError:
-            raise
+        See _ingress_url for more details.
 
-    def _generate_external_url(self, prefix: str) -> str:
-        """Generate external URL for the ingress."""
+        This may return None if no ingress load balancer exists.
+        """
         scheme = "https" if self._construct_gateway_tls_secret() is not None else "http"
-        return f"{scheme}://{self._external_host}{prefix}"
+        return f"{scheme}://{self._ingress_url}"
 
     @property
-    def _external_host(self) -> Optional[str]:
+    def _ingress_url(self) -> Optional[str]:
         """Return the external address for the ingress gateway.
 
         This will return one of (in order of preference):
-        1. the value cached from a previous call to _external_host, even if this value has since changed
+        1. the value cached from a previous call to _ingress_url, even if this value has since changed
         2. the `external-hostname` config if that is set
         3. the load balancer address for the ingress gateway, if it exists and has an IP
         4. None
@@ -909,22 +1044,22 @@ class IstioIngressCharm(CharmBase):
         a single charm execution and the value of the load balancer address may change during that time.  Without this
         preference, we could request certs for one hostname and then serve traffic on another.
 
-        Only use this directly when external_host is allowed to be None.
+        Only use this directly when _ingress_url is allowed to be None.
         """
-        if self._external_host_ is not None:
-            return self._external_host_
+        if self._ingress_url_ is not None:
+            return self._ingress_url_
 
         if external_hostname := self.model.config.get("external_hostname"):
             hostname = cast(str, external_hostname)
             if self._is_valid_hostname(hostname):
-                self._external_host_ = hostname
-                return self._external_host_
+                self._ingress_url_ = hostname
+                return self._ingress_url_
             logger.error("Invalid hostname provided, Please ensure this adheres to RFC 1123")
             return None
 
         if lb_external_address := self._get_lb_external_address:
-            self._external_host_ = lb_external_address
-            return self._external_host_
+            self._ingress_url_ = lb_external_address
+            return self._ingress_url_
 
         logger.debug(
             "Load balancer address not available.  This is likely a transient issue that will resolve itself, but"
@@ -934,10 +1069,10 @@ class IstioIngressCharm(CharmBase):
         return None
 
     @staticmethod
-    def _generate_prefix(data: Dict[str, Any]) -> str:
-        """Generate prefix for the ingress configuration."""
-        name = data["name"].replace("/", "-")
-        return f"/{data['model']}-{name}"
+    def _generate_default_path(app_name: str, model: str) -> str:
+        """Generate the default path for an ingressed route."""
+        app_name = app_name.replace("/", "-")
+        return f"/{model}-{app_name}"
 
     def _is_valid_hostname(self, hostname: Optional[str]) -> bool:
         # https://gateway-api.sigs.k8s.io/reference/spec/#gateway.networking.k8s.io/v1.Hostname
@@ -995,6 +1130,75 @@ def _get_peer_identity_for_juju_application(app_name, namespace):
     namespace.
     """
     return f"cluster.local/ns/{namespace}/sa/{app_name}"
+
+
+def get_relation_by_name_and_app(relations, remote_app_name):
+    """Return the relation object associated with a given remote app."""
+    for rel in relations:
+        if rel.app.name == remote_app_name:
+            return rel
+    raise KeyError(f"Could not find relation with remote_app_name={remote_app_name}")
+
+
+def deduplicate_app_route_data(application_route_data) -> bool:
+    """Remove all routes from any applications that request the same route prefix, editing the input in place.
+
+    For example, given input:
+    application_route_data = {
+        (app0, ingress-relation-A): {"handler": f, "routes"=[RouteInfo(path="path0")],  # <-- Duplicate path0
+        (app1, ingress-relation-A): {"handler": f, "routes"=[RouteInfo(path="path1")],
+        (app2, ingress-relation-B): {"handler": f, "routes"=[RouteInfo(path="path0")],  # <-- Duplicate path0
+        (app3, ingress-relation-B): {"handler": f, "routes"=[RouteInfo(path="path3")],  # <-- Duplicate path3
+        (app4, ingress-relation-B): {"handler": f, "routes"=[RouteInfo(path="path3")],  # <-- Duplicate path3
+    }
+
+    This function would return only:
+    {
+        (app0, ingress-relation-A): {"handler": f, "routes"=[],                         # <-- Duplicate path0
+        (app1, ingress-relation-A): {"handler": f, "routes"=[RouteInfo(path="path1")],
+        (app2, ingress-relation-B): {"handler": f, "routes"=[],                         # <-- Duplicate path0
+        (app3, ingress-relation-B): {"handler": f, "routes"=[],                         # <-- Duplicate path3
+        (app4, ingress-relation-B): {"handler": f, "routes"=[],                         # <-- Duplicate path3
+    }
+    because all other entries have collisions.
+
+    Note that this function does not remove keys from the route map because we still need those later in case we need to
+    nullify what we've previously sent to them via the ingress relation.
+
+    Side effects: this modifies the input in place.
+
+    Return:
+        bool: True if duplicate routes were removed, False otherwise.
+    """
+    # Work on a copy so we don't modify the source object
+    prefix_to_app_map = defaultdict(list)
+    for route_key, route_data in application_route_data.items():
+        for route in route_data["routes"]:
+            prefix_to_app_map[route["prefix"]].append(route_key)
+
+    # Select only prefixes that have multiple routes using them
+    duplicate_prefix_to_app_map = {
+        prefix: route_keys
+        for prefix, route_keys in prefix_to_app_map.items()
+        if len(route_keys) > 1
+    }
+
+    # For any app that has one or more duplicate routes, remove all routes for that app
+    for prefix, route_keys in duplicate_prefix_to_app_map.items():
+        duplicated_app_list = ", ".join(
+            [
+                f"app {app_name} in relation {relation_name}"
+                for app_name, relation_name in route_keys
+            ]
+        )
+        logger.error(
+            f"Ingress through prefix {prefix} requested by more than one application.  Got requests from '{duplicated_app_list}'"
+        )
+        for route_key in route_keys:
+            # Remove all routes for this key
+            application_route_data[route_key]["routes"] = {}
+
+    return len(duplicate_prefix_to_app_map) > 0
 
 
 if __name__ == "__main__":

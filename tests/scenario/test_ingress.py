@@ -5,20 +5,11 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 import scenario
+from ops import ActiveStatus
 
-from charm import IstioIngressCharm
+from charm import IstioIngressCharm, RouteInfo
 from models import HTTPRouteFilterType
 from tests.scenario.test_gateway import generate_certificates_relation
-
-
-@pytest.fixture()
-def mock_ingress_requirer_data():
-    mock_ingress_requirer_data = MagicMock()
-    mock_ingress_requirer_data.app.name = "app-name"
-    mock_ingress_requirer_data.app.model = "app-namespace"
-    mock_ingress_requirer_data.app.port = 80
-    mock_ingress_requirer_data.app.strip_prefix = True
-    return mock_ingress_requirer_data
 
 
 @pytest.mark.parametrize(
@@ -40,13 +31,14 @@ def mock_ingress_requirer_data():
     ],
 )
 def test_construct_httproute_with_strip_prefix(
-    strip_prefix, filters, istio_ingress_charm, istio_ingress_context, mock_ingress_requirer_data
+    strip_prefix, filters, istio_ingress_charm, istio_ingress_context
 ):
     """Test that the _construct_httproute method constructs an HTTPRoute object correctly."""
+    service_name = "app_name"
+    namespace = "model"
+    port = 1234
     prefix = "prefix"
     section_name = "section"
-
-    mock_ingress_requirer_data.app.strip_prefix = strip_prefix
 
     with istio_ingress_context(
         istio_ingress_context.on.update_status(),
@@ -54,18 +46,23 @@ def test_construct_httproute_with_strip_prefix(
     ) as manager:
         charm: IstioIngressCharm = manager.charm
         httproute = charm._construct_httproute(
-            data=mock_ingress_requirer_data,
+            service_name=service_name,
+            namespace=namespace,
+            port=port,
             prefix=prefix,
             section_name=section_name,
+            strip_prefix=strip_prefix,
         )
 
         assert httproute.spec["rules"][0]["filters"] == filters
 
 
-def test_construct_httproute(
-    istio_ingress_charm, istio_ingress_context, mock_ingress_requirer_data
-):
+def test_construct_httproute(istio_ingress_charm, istio_ingress_context):
     """Test that the _construct_httproute method constructs an HTTPRoute object correctly."""
+    service_name = "app_name"
+    namespace = "model"
+    port = 1234
+    strip_prefix = False
     prefix = "prefix"
     section_name = "section"
 
@@ -75,7 +72,10 @@ def test_construct_httproute(
     ) as manager:
         charm: IstioIngressCharm = manager.charm
         httproute = charm._construct_httproute(
-            data=mock_ingress_requirer_data,
+            service_name=service_name,
+            namespace=namespace,
+            port=port,
+            strip_prefix=strip_prefix,
             prefix=prefix,
             section_name=section_name,
         )
@@ -84,27 +84,28 @@ def test_construct_httproute(
         assert len(httproute.spec["parentRefs"]) == 1
         assert httproute.spec["parentRefs"][0]["sectionName"] == section_name
         assert len(httproute.spec["rules"]) == 1
-        assert (
-            httproute.spec["rules"][0]["backendRefs"][0]["port"]
-            == mock_ingress_requirer_data.app.port
-        )
+        assert httproute.spec["rules"][0]["backendRefs"][0]["port"] == port
 
 
-def test_construct_ingress_auth_policy(
-    istio_ingress_charm, istio_ingress_context, mock_ingress_requirer_data
-):
+def test_construct_ingress_auth_policy(istio_ingress_charm, istio_ingress_context):
     """Test that the _construct_ingress_auth_policy method constructs an Authorization Policy object correctly."""
+    target_name = "app-name"
+    target_namespace = "app-namespace"
+    target_port = 80
+
     with istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(),
     ) as manager:
         charm: IstioIngressCharm = manager.charm
-        auth_policy = charm._construct_ingress_auth_policy(
-            data=mock_ingress_requirer_data,
+        auth_policy = charm._construct_auth_policy_from_ingress_to_target(
+            target_name=target_name,
+            target_namespace=target_namespace,
+            target_port=target_port,
         )
 
         # Verify the AuthorizationPolicy resource
-        assert auth_policy.metadata.name == f"app-name-{charm.app.name}-app-namespace-l4"
+        assert auth_policy.metadata.name == f"{target_name}-{charm.app.name}-{target_namespace}-l4"
         assert auth_policy.metadata.namespace == "app-namespace"
 
         # Check spec rules
@@ -125,10 +126,10 @@ def test_construct_ingress_auth_policy(
         }
 
 
-def test_construct_redirect_to_https_httproute(
-    istio_ingress_charm, istio_ingress_context, mock_ingress_requirer_data
-):
+def test_construct_redirect_to_https_httproute(istio_ingress_charm, istio_ingress_context):
     """Test that _construct_redirect_to_https_httproute constructs an HTTPRoute for redirecting to HTTPS correctly."""
+    app_name = "app-name"
+    model = "model-name"
     prefix = "prefix"
     section_name = "section"
 
@@ -138,13 +139,15 @@ def test_construct_redirect_to_https_httproute(
     ) as manager:
         charm: IstioIngressCharm = manager.charm
         httproute = charm._construct_redirect_to_https_httproute(
-            data=mock_ingress_requirer_data,
+            app_name=app_name,
+            model=model,
             prefix=prefix,
             section_name=section_name,
         )
 
         # Assert that we have a single rule that has a redirect filter and no backend refs
         assert len(httproute.spec["parentRefs"]) == 1
+        assert httproute.metadata.name == f"{app_name}-{section_name}-{charm.app.name}"
         assert httproute.spec["parentRefs"][0]["sectionName"] == section_name
         assert len(httproute.spec["rules"]) == 1
         assert len(httproute.spec["rules"][0].get("backendRefs", [])) == 0
@@ -177,41 +180,55 @@ def generate_ingress_relation_data(
 
 
 @pytest.mark.parametrize(
-    "ingress_relations, n_routes_expected",
+    "routes, expected_ingressed_prefixes",
     [
         # no relations
-        ([], 0),
+        ([], []),
         # with a single relation that has all data
-        ([generate_ingress_relation_data("remote-app0", "remote-model0")], 1),
+        (
+            [
+                RouteInfo(
+                    service_name="remote-app0",
+                    namespace="remote-model0",
+                    port=1234,
+                    strip_prefix=False,
+                    prefix="/path0",
+                ),
+            ],
+            ["/path0"],
+        ),
         # with multiple relations that have all data
         (
             [
-                generate_ingress_relation_data("remote-app0", "remote-model0"),
-                generate_ingress_relation_data("remote-app1", "remote-model1"),
-            ],
-            2,
-        ),
-        # with multiple relations, some of which are not complete (do not have full data yet) and should be skipped
-        (
-            [
-                generate_ingress_relation_data("remote-app0", "remote-model0"),
-                scenario.Relation(
-                    endpoint="ingress",
-                    interface="ingress",
-                    remote_app_name="incomplete-app",
+                RouteInfo(
+                    service_name="remote-app0",
+                    namespace="remote-model0",
+                    port=1234,
+                    strip_prefix=False,
+                    prefix="/path0",
+                ),
+                RouteInfo(
+                    service_name="remote-app1",
+                    namespace="remote-model1",
+                    port=1234,
+                    strip_prefix=False,
+                    prefix="/path1",
                 ),
             ],
-            1,
+            [
+                "/path0",
+                "/path1",
+            ],
         ),
     ],
 )
 @patch(
-    "charm.IstioIngressCharm._external_host", new_callable=PropertyMock, return_value="example.com"
+    "charm.IstioIngressCharm._ingress_url", new_callable=PropertyMock, return_value="example.com"
 )
 def test_sync_ingress_resources(
-    _mock_external_host,
-    ingress_relations,
-    n_routes_expected,
+    _mock_ingress_url,
+    routes,
+    expected_ingressed_prefixes,
     istio_ingress_charm,
     istio_ingress_context,
 ):
@@ -226,18 +243,17 @@ def test_sync_ingress_resources(
     with istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(
-            relations=ingress_relations,
             leader=True,
         ),
     ) as manager:
         charm: IstioIngressCharm = manager.charm
 
         # Patch the managers into the charm
-        charm._get_ingress_resource_manager = mock_ingress_manager_factory
+        charm._get_ingress_route_resource_manager = mock_ingress_manager_factory
         charm._get_ingress_auth_policy_resource_manager = mock_auth_manager_factory
 
         # Call the method under test
-        charm._sync_ingress_resources()
+        charm._sync_ingress_resources(routes=routes)
 
         # Assertions: Managers' reconcile methods are called once
         mock_ingress_manager.reconcile.assert_called_once()
@@ -248,13 +264,14 @@ def test_sync_ingress_resources(
         auth_resources = mock_auth_manager.reconcile.call_args[0][0]
 
         # Assertions: Check resource counts
-        assert len(ingress_resources) == n_routes_expected
-        assert len(auth_resources) == n_routes_expected
+        assert len(ingress_resources) == len(expected_ingressed_prefixes)
+        assert len(auth_resources) == len(expected_ingressed_prefixes)
 
         # Assertions: Verify each ingress resource's structure
-        for route in ingress_resources:
+        for route, prefix in zip(ingress_resources, expected_ingressed_prefixes):
             assert len(route.spec["parentRefs"]) == 1
             assert route.spec["parentRefs"][0]["sectionName"] == "http"
+            assert route.spec["rules"][0]["matches"][0]["path"]["value"] == prefix
 
         # Assertions: Verify authorization resources
         for auth in auth_resources:
@@ -263,40 +280,51 @@ def test_sync_ingress_resources(
 
 
 @pytest.mark.parametrize(
-    "ingress_relations, n_routes_expected",
+    "routes, n_routes_expected",
     [
         # no relations
         ([], 0),
         # with a single relation that has all data
-        ([generate_ingress_relation_data("remote-app0", "remote-model0")], 2),
-        # with multiple relations that have all data
         (
             [
-                generate_ingress_relation_data("remote-app0", "remote-model0"),
-                generate_ingress_relation_data("remote-app1", "remote-model1"),
-            ],
-            4,
-        ),
-        # with multiple relations, some of which are not complete (do not have full data yet) and should be skipped
-        (
-            [
-                generate_ingress_relation_data("remote-app0", "remote-model0"),
-                scenario.Relation(
-                    endpoint="ingress",
-                    interface="ingress",
-                    remote_app_name="incomplete-app",
+                RouteInfo(
+                    service_name="remote-app0",
+                    namespace="remote-model0",
+                    port=1234,
+                    strip_prefix=False,
+                    prefix="/path0",
                 ),
             ],
             2,
         ),
+        # with multiple relations that have all data
+        (
+            [
+                RouteInfo(
+                    service_name="remote-app0",
+                    namespace="remote-model0",
+                    port=1234,
+                    strip_prefix=False,
+                    prefix="/path0",
+                ),
+                RouteInfo(
+                    service_name="remote-app1",
+                    namespace="remote-model1",
+                    port=1234,
+                    strip_prefix=False,
+                    prefix="/path1",
+                ),
+            ],
+            4,
+        ),
     ],
 )
 @patch(
-    "charm.IstioIngressCharm._external_host", new_callable=PropertyMock, return_value="example.com"
+    "charm.IstioIngressCharm._ingress_url", new_callable=PropertyMock, return_value="example.com"
 )
 def test_sync_ingress_resources_with_tls(
-    _mock_external_host,
-    ingress_relations,
+    _mock_ingress_url,
+    routes,
     n_routes_expected,
     istio_ingress_charm,
     istio_ingress_context,
@@ -308,20 +336,19 @@ def test_sync_ingress_resources_with_tls(
     with istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(
-            relations=ingress_relations
-            + [generate_certificates_relation(subject="example.com")["relation"]],
+            relations=[generate_certificates_relation(subject="example.com")["relation"]],
             leader=True,
         ),
     ) as manager:
         charm: IstioIngressCharm = manager.charm
-        charm._get_ingress_resource_manager = mock_krm_factory
-        charm._sync_ingress_resources()
+        charm._get_ingress_route_resource_manager = mock_krm_factory
+        charm._sync_ingress_resources(routes=routes)
 
         # Assert that we've tried to reconcile the kubernetes resources
-        charm._get_ingress_resource_manager().reconcile.assert_called_once()
+        charm._get_ingress_route_resource_manager().reconcile.assert_called_once()
 
         # Assert that _+_______________________
-        resources = charm._get_ingress_resource_manager().reconcile.call_args[0][0]
+        resources = charm._get_ingress_route_resource_manager().reconcile.call_args[0][0]
 
         assert len(resources) == n_routes_expected
         # If TLS is configured, HTTP routes should be redirects and HTTPS routes should route to a parentRef
@@ -335,3 +362,108 @@ def test_sync_ingress_resources_with_tls(
                 assert route.spec["parentRefs"][0]["sectionName"] == "https"
             else:
                 raise AssertionError("Unexpected section name")
+
+
+@pytest.mark.parametrize(
+    "ingress_relations, paths_expected",
+    [
+        # no relations
+        ([], {}),
+        # with a single relation that has all data
+        (
+            [generate_ingress_relation_data("remote-app0", "remote-model0")],
+            # (app-name, ingress-relation-name): [list of paths for this app],
+            {("remote-app0", "ingress"): ["/remote-model0-remote-app0"]},
+        ),
+        # with multiple related apps on `ingress`
+        (
+            [
+                generate_ingress_relation_data("remote-app0", "remote-model0"),
+                generate_ingress_relation_data("remote-app1", "remote-model1"),
+                generate_ingress_relation_data("remote-app2", "remote-model2"),
+            ],
+            # (app-name, ingress-relation-name): [list of paths for this app],
+            {
+                ("remote-app0", "ingress"): ["/remote-model0-remote-app0"],
+                ("remote-app1", "ingress"): ["/remote-model1-remote-app1"],
+                ("remote-app2", "ingress"): ["/remote-model2-remote-app2"],
+            },
+        ),
+    ],
+)
+@patch(
+    "charm.IstioIngressCharm._ingress_url", new_callable=PropertyMock, return_value="example.com"
+)
+def test_get_routes(
+    _mock_ingress_url,
+    ingress_relations,
+    paths_expected,
+    istio_ingress_charm,
+    istio_ingress_context,
+):
+    """Test that .get_routes returns the expected routes for given ingress relations."""
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(
+            relations=ingress_relations,
+            leader=True,
+        ),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        routes = charm._get_routes()
+
+        # Extract the paths requested by these routes to compare to expected
+        path_map_actual = {
+            k: [r["prefix"] for r in route_data["routes"]] for k, route_data in routes.items()
+        }
+        assert path_map_actual == paths_expected
+
+
+@pytest.mark.parametrize(
+    "ingress_relations",
+    [
+        (generate_ingress_relation_data("remote-app0", "remote-model0"),),
+    ],
+)
+@patch("charm.IstioIngressCharm._is_ready", return_value=True)
+@patch(
+    "charm.IstioIngressCharm._ingress_url", new_callable=PropertyMock, return_value="example.com"
+)
+def test_ingress_e2e(
+    _mock_ingress_url,
+    _mock_is_ready,
+    ingress_relations,
+    istio_ingress_charm,
+    istio_ingress_context,
+):
+    """Test end-to-end operation of the charm with ingress relations.
+
+    In particular, this test is important to assert that we publish the ingress url back to related applications.  This
+    functionality is not tested elsewhere.
+    """
+    state_out = istio_ingress_context.run(
+        istio_ingress_context.on.config_changed(),
+        state=scenario.State(
+            relations=ingress_relations,
+            leader=True,
+            containers=[
+                scenario.Container(
+                    "metrics-proxy",
+                    can_connect=True,
+                )
+            ],
+        ),
+    )
+
+    # Assert all relations have been told their ingress url
+    for relation in ingress_relations:
+        expected_app_data = {
+            "ingress": json.dumps(
+                {
+                    "url": f"http://{_mock_ingress_url.return_value}/{json.loads(relation.remote_app_data['model'])}-{json.loads(relation.remote_app_data['name'])}"
+                }
+            )
+        }
+        assert state_out.get_relation(relation.id).local_app_data == expected_app_data
+
+    assert isinstance(state_out.unit_status, ActiveStatus)
