@@ -21,8 +21,13 @@ from charms.traefik_k8s.v2.ingress import IngressPerAppProvider as IPAv2
 from lightkube.core.client import Client
 from lightkube.core.exceptions import ApiError
 from lightkube.generic_resource import create_namespaced_resource
+from lightkube.models.autoscaling_v2 import (
+    CrossVersionObjectReference,
+    HorizontalPodAutoscalerSpec,
+)
 from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.apps_v1 import Deployment
+from lightkube.resources.autoscaling_v2 import HorizontalPodAutoscaler
 from lightkube.resources.core_v1 import Secret, Service
 from lightkube.types import PatchType
 from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
@@ -87,7 +92,7 @@ RESOURCE_TYPES = {
     ),
 }
 
-GATEWAY_RESOURCE_TYPES = {RESOURCE_TYPES["Gateway"], Secret}
+GATEWAY_RESOURCE_TYPES = {RESOURCE_TYPES["Gateway"], Secret, HorizontalPodAutoscaler}
 INGRESS_RESOURCE_TYPES = {
     RESOURCE_TYPES["GRPCRoute"],
     RESOURCE_TYPES["ReferenceGrant"],
@@ -95,6 +100,7 @@ INGRESS_RESOURCE_TYPES = {
 }
 INGRESS_AUTHENTICATED_NAME = "ingress"
 AUTHORIZATION_POLICY_RESOURCE_TYPES = {RESOURCE_TYPES["AuthorizationPolicy"]}
+
 GATEWAY_SCOPE = "istio-gateway"
 INGRESS_SCOPE = "istio-ingress"
 INGRESS_AUTH_POLICY_SCOPE = "istio-ingress-authorization-policy"
@@ -102,6 +108,7 @@ EXTZ_AUTH_POLICY_SCOPE = "external-authorizer-authorization-policy"
 
 INGRESS_CONFIG_RELATION = "istio-ingress-config"
 FORWARD_AUTH_RELATION = "forward-auth"
+PEERS_RELATION = "peers"
 
 
 class DataValidationError(RuntimeError):
@@ -196,6 +203,9 @@ class IstioIngressCharm(CharmBase):
             self.on[INGRESS_CONFIG_RELATION].relation_broken, self._handle_ingress_config
         )
         self.framework.observe(self.on.leader_elected, self._handle_ingress_config)
+        self.framework.observe(self.on[PEERS_RELATION].relation_changed, self._on_peers_changed)
+        self.framework.observe(self.on[PEERS_RELATION].relation_departed, self._on_peers_changed)
+
         # During the initialisation of the charm, we do not have a LoadBalancer and thus a LoadBalancer external IP.
         # If we need that IP to request the certs, disable cert handling until we have it.
         if (external_hostname := self._ingress_url) is None:
@@ -207,7 +217,7 @@ class IstioIngressCharm(CharmBase):
             self._cert_handler = CertHandler(
                 self,
                 key="istio-ingress-cert",  # TODO: how is this key used?  if we have two ingresses, do we get issues?
-                peer_relation_name="peers",
+                peer_relation_name=PEERS_RELATION,
                 certificates_relation_name="certificates",
                 sans=[external_hostname],
                 cert_subject=external_hostname,
@@ -316,8 +326,28 @@ class IstioIngressCharm(CharmBase):
         """Event handler for forward_auth config changes."""
         self._sync_all_resources()
 
+    def _on_peers_changed(self, _):
+        """Event handler for whenever peer topology changes."""
+        self._sync_all_resources()
+
     def _on_remove(self, _):
-        """Event handler for remove."""
+        """Event handler for remove.
+
+        The objective of this handler is to remove all application-scoped resources when the application is being scaled
+        to 0 or removed.  We intentionally do not put this removal action behind a leader guard (eg, behind
+        `if self.unit.is_leader()`) for the reasons discussed
+        [here](https://github.com/canonical/istio-ingress-k8s-operator/issues/16).
+        """
+        # if there are still units left, skip removal
+        if self.model.app.planned_units() > 0:
+            logger.info(
+                "Handling remove event: skipping resource removal because application is not scaling to 0."
+            )
+            return
+        logger.info(
+            "Handling remove event: Attempting to remove application resources because application is scaling to 0."
+        )
+
         # Removing tailing ingresses
         kim = self._get_ingress_route_resource_manager()
         kim.delete()
@@ -647,6 +677,20 @@ class IstioIngressCharm(CharmBase):
             spec=http_route.spec.model_dump(exclude_none=True),
         )
 
+    def _construct_hpa(self, unit_count: int) -> HorizontalPodAutoscaler:
+        return HorizontalPodAutoscaler(
+            metadata=ObjectMeta(name=self.app.name, namespace=self.model.name),
+            spec=HorizontalPodAutoscalerSpec(
+                scaleTargetRef=CrossVersionObjectReference(
+                    apiVersion="apps/v1",
+                    kind="Deployment",
+                    name=self.managed_name,
+                ),
+                minReplicas=unit_count,
+                maxReplicas=unit_count,
+            ),
+        )
+
     def _sync_all_resources(self):
         """Synchronize all resources including authentication, gateway, ingress, and certificates.
 
@@ -657,7 +701,7 @@ class IstioIngressCharm(CharmBase):
         * Fetch route information from the ingress relation
         * Synchronize external authorization configuration.
             - If missing valid ingress-config relation when auth is provided, set to blocked and remove gateway.
-        * Synchronize gateway resources and validate readiness.
+        * Reconcile HPA and gateway resources to align replicas with unit count and ensure gateway readiness.
         * Validate the external hostname.
         * Synchronize ingress resources
         * Publish route information to ingressed applications
@@ -665,6 +709,10 @@ class IstioIngressCharm(CharmBase):
         * Update forward auth relation data with ingressed apps.
         * Request certificate inspection.
         """
+        if not self.unit.is_leader():
+            self.unit.status = ActiveStatus("Backup unit; standing by for leader takeover")
+            return
+
         # Check authentication configuration.
         auth_decisions_address = self._get_oauth_decisions_address()
 
@@ -695,7 +743,8 @@ class IstioIngressCharm(CharmBase):
             return
         self._sync_ext_authz_auth_policy(auth_decisions_address)
 
-        # Synchronize gateway resources and check readiness.
+        # Reconcile HPA and gateway resources
+
         self._sync_gateway_resources()
         self.unit.status = MaintenanceStatus("Validating gateway readiness")
         if not self._is_ready():
@@ -860,16 +909,26 @@ class IstioIngressCharm(CharmBase):
         policy_manager.reconcile(resources)
 
     def _sync_gateway_resources(self):
+        unit_count = self.model.app.planned_units()
         krm = self._get_gateway_resource_manager()
-
         resources_list = []
         tls_secret_name = None
-        if secret := self._construct_gateway_tls_secret():
-            resources_list.append(secret)
-            if secret.metadata is None:
-                raise ValueError("Unexpected error: secret.metadata is None")
-            tls_secret_name = secret.metadata.name
-        resources_list.append(self._construct_gateway(tls_secret_name=tls_secret_name))
+
+        # Skip reconciliation if no units are left (unit_count < 1):
+        #  - This typically indicates an application removal event; we rely on the remove hook for cleanup.
+        #  - Attempting to reconcile with an HPA that sets replicas to zero is invalid.
+        #  - This guard exists because some events can call _sync_all_resources before the remove hook runs,
+        #    leading to k8s validation webhook errors when planned_units is 0.
+        if unit_count > 0:
+            if secret := self._construct_gateway_tls_secret():
+                resources_list.append(secret)
+                if secret.metadata is None:
+                    raise ValueError("Unexpected error: secret.metadata is None")
+                tls_secret_name = secret.metadata.name
+
+            resources_list.append(self._construct_gateway(tls_secret_name=tls_secret_name))
+            resources_list.append(self._construct_hpa(unit_count))
+
         krm.reconcile(resources_list)
 
         # TODO: Delete below line when we figure out a way to unset hostname on reconcile if set to empty/invalid/unset

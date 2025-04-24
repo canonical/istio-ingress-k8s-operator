@@ -98,7 +98,7 @@ async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
 @pytest.mark.abort_on_fail
 async def test_relate(ops_test: OpsTest):
     await ops_test.model.add_relation("ipa-tester:ingress", "istio-ingress-k8s:ingress")
-    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER])
+    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER], status="active", timeout=1000)
 
 
 @pytest.mark.abort_on_fail
@@ -178,7 +178,7 @@ async def test_route_validity(
     await ops_test.model.applications[APP_NAME].set_config(
         {"external_hostname": external_hostname}
     )
-    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER])
+    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER], status="active", timeout=1000)
 
     model = ops_test.model.name
 

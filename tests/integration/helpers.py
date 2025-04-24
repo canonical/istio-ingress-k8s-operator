@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 import lightkube
 import requests
 from lightkube.generic_resource import create_namespaced_resource
+from lightkube.resources.autoscaling_v2 import HorizontalPodAutoscaler
 from lightkube.resources.core_v1 import ConfigMap, Service
 from pytest_operator.plugin import OpsTest
 from requests.adapters import DEFAULT_POOLBLOCK, DEFAULT_POOLSIZE, DEFAULT_RETRIES, HTTPAdapter
@@ -172,6 +173,24 @@ async def get_route_condition(ops_test: OpsTest, route_name: str) -> Optional[Di
         return cast(dict, route.status["parents"][0])
     except Exception as e:
         logger.error("Error retrieving HTTPRoute condition: %s", e, exc_info=1)
+        return None
+
+
+async def get_hpa(namespace: str, hpa_name: str) -> Optional[HorizontalPodAutoscaler]:
+    """Retrieve the HPA resource so we can inspect .spec and .status directly.
+
+    Args:
+        namespace: Namespace of the HPA resource.
+        hpa_name: Name of the HPA resource.
+
+    Returns:
+        The HorizontalPodAutoscaler object or None if not found / on error.
+    """
+    try:
+        c = lightkube.Client()
+        return c.get(HorizontalPodAutoscaler, namespace=namespace, name=hpa_name)
+    except Exception as e:
+        logger.error("Error retrieving HPA %s: %s", hpa_name, e, exc_info=True)
         return None
 
 
