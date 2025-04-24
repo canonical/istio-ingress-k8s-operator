@@ -411,14 +411,29 @@ def test_sync_all_triggers_hpa_reconcile(
     assert result.unit_status.message.startswith("Serving at")
 
 
-@pytest.mark.parametrize("leader,call_count", [(True, 1), (False, 0)])
+@pytest.mark.parametrize(
+    "planned_units, call_count",
+    [
+        (0, 1),  # last unit → we should clean up
+        (1, 0),  # still 1 (scale-down to 1) → skip
+        (2, 0),  # >1 (scale-down to >1) → skip
+    ],
+)
 @patch.object(IstioIngressCharm, "_get_gateway_resource_manager")
-def test_on_remove_hpa_deleted_only_if_leader(
-    mock_get_gateway_manaer, istio_ingress_charm, istio_ingress_context, leader, call_count
+def test_on_remove_deletes_hpa_only_when_last_unit(
+    mock_get_gateway_manager,
+    istio_ingress_charm,
+    istio_ingress_context,
+    planned_units,
+    call_count,
 ):
-    """Assert that _on_remove() deletes the HPA only if the unit is leader."""
-    state = scenario.State(relations=[], leader=leader)
+    state = scenario.State(
+        relations=[],
+        leader=False,
+        planned_units=planned_units,
+    )
+
     istio_ingress_context.run(istio_ingress_context.on.remove(), state)
 
-    manager = mock_get_gateway_manaer.return_value
+    manager = mock_get_gateway_manager.return_value
     assert manager.delete.call_count == call_count

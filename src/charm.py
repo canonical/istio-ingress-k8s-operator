@@ -319,7 +319,8 @@ class IstioIngressCharm(CharmBase):
 
     def _on_remove(self, _):
         """Event handler for remove."""
-        if not self.unit.is_leader():
+        # if there are still units left, skip removal
+        if self.model.app.planned_units() > 0:
             return
 
         # Removing tailing ingresses
@@ -774,8 +775,15 @@ class IstioIngressCharm(CharmBase):
         policy_manager.reconcile(resources)
 
     def _sync_gateway_resources(self):
-        krm = self._get_gateway_resource_manager()
         unit_count = self.model.app.planned_units()
+
+        # if there are no units left (unit_count < 1), skip reconcile:
+        #  - we assume this is a remove event and the remove hook will clean everything up
+        #  - updating the HPA with zero replicas is invalid
+        if unit_count < 1:
+            return
+
+        krm = self._get_gateway_resource_manager()
         resources_list = []
         tls_secret_name = None
 
