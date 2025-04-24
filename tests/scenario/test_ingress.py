@@ -147,7 +147,7 @@ def test_construct_redirect_to_https_httproute(istio_ingress_charm, istio_ingres
 
         # Assert that we have a single rule that has a redirect filter and no backend refs
         assert len(httproute.spec["parentRefs"]) == 1
-        assert httproute.metadata.name == f"{app_name}-{section_name}"
+        assert httproute.metadata.name == f"{app_name}-{section_name}-{charm.app.name}"
         assert httproute.spec["parentRefs"][0]["sectionName"] == section_name
         assert len(httproute.spec["rules"]) == 1
         assert len(httproute.spec["rules"][0].get("backendRefs", [])) == 0
