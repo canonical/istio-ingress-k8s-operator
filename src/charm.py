@@ -94,14 +94,13 @@ RESOURCE_TYPES = {
     ),
 }
 
-GATEWAY_RESOURCE_TYPES = {RESOURCE_TYPES["Gateway"], Secret}
+GATEWAY_RESOURCE_TYPES = {RESOURCE_TYPES["Gateway"], Secret, HorizontalPodAutoscaler}
 INGRESS_RESOURCE_TYPES = {
     RESOURCE_TYPES["GRPCRoute"],
     RESOURCE_TYPES["ReferenceGrant"],
     RESOURCE_TYPES["HTTPRoute"],
 }
 AUTHORIZATION_POLICY_RESOURCE_TYPES = {RESOURCE_TYPES["AuthorizationPolicy"]}
-HPA_RESOURCE_TYPES = {HorizontalPodAutoscaler}
 
 GATEWAY_SCOPE = "istio-gateway"
 INGRESS_SCOPE = "istio-ingress"
@@ -191,8 +190,8 @@ class IstioIngressCharm(CharmBase):
             self.on[INGRESS_CONFIG_RELATION].relation_broken, self._handle_ingress_config
         )
         self.framework.observe(self.on.leader_elected, self._handle_ingress_config)
-        self.framework.observe(self.on[PEERS_RELATION].relation_joined, self._on_peers_changed)
         self.framework.observe(self.on[PEERS_RELATION].relation_changed, self._on_peers_changed)
+        self.framework.observe(self.on[PEERS_RELATION].relation_departed, self._on_peers_changed)
 
         # During the initialisation of the charm, we do not have a LoadBalancer and thus a LoadBalancer external IP.
         # If we need that IP to request the certs, disable cert handling until we have it.
@@ -294,14 +293,6 @@ class IstioIngressCharm(CharmBase):
             logger=logger,
         )
 
-    def _get_hpa_resource_manager(self):
-        return KubernetesResourceManager(
-            labels=create_charm_default_labels(self.app.name, self.model.name, scope=HPA_SCOPE),
-            resource_types=HPA_RESOURCE_TYPES,  # pyright: ignore
-            lightkube_client=self.lightkube_client,
-            logger=logger,
-        )
-
     def _on_cert_handler_cert_changed(self, _):
         """Event handler for when tls certificates have changed."""
         self._sync_all_resources()
@@ -334,9 +325,6 @@ class IstioIngressCharm(CharmBase):
         # Removing tailing ingresses
         kim = self._get_ingress_resource_manager()
         kim.delete()
-
-        khm = self._get_hpa_resource_manager()
-        khm.delete()
 
         self._remove_gateway_resources()
 
@@ -675,10 +663,9 @@ class IstioIngressCharm(CharmBase):
         * If auth relation exists but no decisions address, set to blocked and remove gateway.
         * Synchronize external authorization configuration.
             - If missing valid ingress-config relation when auth is provided, set to blocked and remove gateway.
-        * Synchronize gateway resources and validate readiness.
+        * Reconcile HPA and gateway resources to align replicas with unit count and ensure gateway readiness.
         * Validate the external hostname.
         * Synchronize ingress resources and set up the proxy service.
-        * Reconcile HPA so Gateway deployment's replicas match the current unit count
         * Update forward auth relation data with ingressed apps.
         * Request certificate inspection.
         """
@@ -709,7 +696,7 @@ class IstioIngressCharm(CharmBase):
             return
         self._sync_ext_authz_auth_policy(auth_decisions_address)
 
-        # Synchronize gateway resources and check readiness.
+        # Reconcile HPA and gateway resources
         self._sync_gateway_resources()
         self.unit.status = MaintenanceStatus("Validating gateway readiness")
         if not self._is_ready():
@@ -731,9 +718,6 @@ class IstioIngressCharm(CharmBase):
             logger.error("Ingress sync failed: %s", e)
             self.unit.status = BlockedStatus("Issue with setting up an ingress")
             return
-
-        # Reconcile HPA so Gateway deployment's replicas match the current unit count
-        self._sync_hpa_resources()
 
         # Update forward auth relation data with ingressed apps.
         if self.model.get_relation(FORWARD_AUTH_RELATION):
@@ -791,15 +775,19 @@ class IstioIngressCharm(CharmBase):
 
     def _sync_gateway_resources(self):
         krm = self._get_gateway_resource_manager()
-
+        unit_count = self.model.app.planned_units()
         resources_list = []
         tls_secret_name = None
+
         if secret := self._construct_gateway_tls_secret():
             resources_list.append(secret)
             if secret.metadata is None:
                 raise ValueError("Unexpected error: secret.metadata is None")
             tls_secret_name = secret.metadata.name
+
         resources_list.append(self._construct_gateway(tls_secret_name=tls_secret_name))
+        resources_list.append(self._construct_hpa(unit_count))
+
         krm.reconcile(resources_list)
 
         # TODO: Delete below line when we figure out a way to unset hostname on reconcile if set to empty/invalid/unset
@@ -893,11 +881,6 @@ class IstioIngressCharm(CharmBase):
 
         except ApiError:
             raise
-
-    def _sync_hpa_resources(self):
-        khm = self._get_hpa_resource_manager()
-        unit_count = self.model.app.planned_units()
-        khm.reconcile([self._construct_hpa(unit_count)])
 
     def _generate_external_url(self, prefix: str) -> str:
         """Generate external URL for the ingress."""

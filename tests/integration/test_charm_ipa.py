@@ -15,7 +15,6 @@ from conftest import (
 )
 from helpers import (
     dequote,
-    fetch_envoy_peer_metadata_ids,
     get_auth_policy_spec,
     get_hpa,
     get_k8s_service_address,
@@ -99,11 +98,11 @@ async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
 
 
 @pytest.mark.abort_on_fail
-async def test_scale(ops_test: OpsTest):
+async def test_hpa_scale_up(ops_test: OpsTest):
     await ops_test.model.applications[APP_NAME].scale(3)
     await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=1000)
 
-    hpa = await get_hpa(ops_test, APP_NAME)
+    hpa = await get_hpa(ops_test.model.name, APP_NAME)
 
     assert hpa is not None
     assert hpa.spec.minReplicas == 3
@@ -111,7 +110,7 @@ async def test_scale(ops_test: OpsTest):
 
     async def wait_for_current_replicas(expected_replicas, retries=10, delay=10):
         for _ in range(retries):
-            hpa = await get_hpa(ops_test, APP_NAME)
+            hpa = await get_hpa(ops_test.model.name, APP_NAME)
             if hpa.status.currentReplicas == expected_replicas:
                 return True
             await asyncio.sleep(delay)
@@ -125,7 +124,7 @@ async def test_scale(ops_test: OpsTest):
 @pytest.mark.abort_on_fail
 async def test_relate(ops_test: OpsTest):
     await ops_test.model.add_relation("ipa-tester:ingress", "istio-ingress-k8s:ingress")
-    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER])
+    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER], status="active", timeout=1000)
 
 
 @pytest.mark.abort_on_fail
@@ -205,7 +204,7 @@ async def test_route_validity(
     await ops_test.model.applications[APP_NAME].set_config(
         {"external_hostname": external_hostname}
     )
-    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER])
+    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER], status="active", timeout=1000)
 
     model = ops_test.model.name
 
@@ -235,28 +234,28 @@ async def test_route_validity(
 
 
 @pytest.mark.abort_on_fail
-async def test_gateway_round_robin(ops_test: OpsTest):
+async def test_hpa_scale_down(ops_test: OpsTest):
 
-    model = ops_test.model.name
-    istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
-    tester_url = f"http://{istio_ingress_address}/{model}-{IPA_TESTER}"
-    envoy_ids = fetch_envoy_peer_metadata_ids(tester_url, 9)
-    assert len(envoy_ids) == 3
-
-    await ops_test.model.applications[APP_NAME].scale(scale_change=-2)
+    await ops_test.model.applications[APP_NAME].scale(1)
     await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER], status="active", timeout=1000)
 
-    # Retry logic to wait for K8s to update the service endpoints
-    async def wait_for_envoy_count(expected_count, retries=10, delay=10):
-        for _ in range(retries):
-            envoy_ids = fetch_envoy_peer_metadata_ids(tester_url, 9)
-            if len(envoy_ids) == expected_count:
-                return envoy_ids
-            await asyncio.sleep(delay)
-        return fetch_envoy_peer_metadata_ids(tester_url, 9)  # Final fetch for assertion
+    hpa = await get_hpa(ops_test.model.name, APP_NAME)
 
-    envoy_ids = await wait_for_envoy_count(1)
-    assert len(envoy_ids) == 1
+    assert hpa is not None
+    assert hpa.spec.minReplicas == 1
+    assert hpa.spec.maxReplicas == 1
+
+    async def wait_for_current_replicas(expected_replicas, retries=10, delay=10):
+        for _ in range(retries):
+            hpa = await get_hpa(ops_test.model.name, APP_NAME)
+            if hpa.status.currentReplicas == expected_replicas:
+                return True
+            await asyncio.sleep(delay)
+        return False
+
+    assert await wait_for_current_replicas(
+        1
+    ), f"Expected currentReplicas to be 1, got {hpa.status.currentReplicas}"
 
 
 @pytest.fixture(scope="module")
