@@ -105,7 +105,6 @@ GATEWAY_SCOPE = "istio-gateway"
 INGRESS_SCOPE = "istio-ingress"
 INGRESS_AUTH_POLICY_SCOPE = "istio-ingress-authorization-policy"
 EXTZ_AUTH_POLICY_SCOPE = "external-authorizer-authorization-policy"
-HPA_SCOPE = "istio-ingress-hpa"
 
 INGRESS_CONFIG_RELATION = "istio-ingress-config"
 FORWARD_AUTH_RELATION = "forward-auth"
@@ -698,7 +697,6 @@ class IstioIngressCharm(CharmBase):
         * Update forward auth relation data with ingressed apps.
         * Request certificate inspection.
         """
-
         if not self.unit.is_leader():
             self.unit.status = ActiveStatus("Backup unit; standing by for leader takeover")
             return
