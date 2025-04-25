@@ -8,6 +8,7 @@ import scenario
 from ops import ActiveStatus, BlockedStatus
 
 from charm import IstioIngressCharm
+from models import Action
 
 
 @pytest.mark.parametrize(
@@ -64,7 +65,7 @@ def test_ext_authz_setup(
     out = istio_ingress_context.run(istio_ingress_context.on.config_changed(), state)
 
     mock_publish.assert_called_once_with(expected_decision)
-    mock_sync.assert_called_once_with(expected_decision)
+    mock_sync.assert_called_once_with(expected_decision, [])
     assert isinstance(out.unit_status, ActiveStatus)
     assert out.unit_status.message.startswith("Serving at")
 
@@ -123,3 +124,54 @@ def test_auth_and_ingress_incomplete(
         assert isinstance(out.unit_status, BlockedStatus)
         assert out.unit_status.message == expected_message
         mock_remove.assert_called_once()
+
+
+@pytest.mark.parametrize(
+    "external_authorizer, unauthenticated_paths",
+    [
+        # No paths unauthenticated
+        ("external_authorizer", []),
+        # Some paths unauthenticated
+        ("another_external_authorizer", ["/not-me", "/or-me"]),
+    ],
+)
+def test_construct_ext_authz_policy(
+    external_authorizer,
+    unauthenticated_paths,
+    istio_ingress_charm,
+    istio_ingress_context,
+):
+    """Test that _construct_ext_authz_policy works correctly with and without unauthenticated paths."""
+    # Initialize charm in test scenario
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(
+            leader=True,
+        ),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+
+        # Call the method under test
+        auth_policy = charm._construct_ext_authz_policy(
+            ext_authz_provider_name=external_authorizer,
+            unauthenticated_paths=unauthenticated_paths,
+        )
+
+        # Assert
+        # Is a custom action with correct external authorizer
+        assert auth_policy["spec"]["action"] == Action.custom
+        assert auth_policy["spec"]["provider"]["name"] == external_authorizer
+
+        if unauthenticated_paths:
+            # Has a single rule with a single notPaths operation to omit any paths that should not be authenticated
+            assert len(auth_policy["spec"]["rules"]) == 1
+            assert len(auth_policy["spec"]["rules"][0]["to"]) == 1
+            assert len(auth_policy["spec"]["rules"][0]["to"][0]["operation"]) == 1
+            assert (
+                auth_policy["spec"]["rules"][0]["to"][0]["operation"]["notPaths"]
+                == unauthenticated_paths
+            )
+        else:
+            # Has a single empty rule
+            assert len(auth_policy["spec"]["rules"]) == 1
+            assert auth_policy["spec"]["rules"][0] == {}

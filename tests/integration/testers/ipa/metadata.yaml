@@ -8,6 +8,9 @@ requires:
   ingress:
     interface: ingress
     limit: 1
+  ingress-2:
+    interface: ingress
+    limit: 1
 
 containers:
   echo-server:

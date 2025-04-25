@@ -156,12 +156,12 @@ def test_construct_redirect_to_https_httproute(istio_ingress_charm, istio_ingres
 
 
 def generate_ingress_relation_data(
-    name, model, port=80, ip="1.2.3.4", host=None, strip_prefix=False
+    name, model, port=80, ip="1.2.3.4", host=None, strip_prefix=False, endpoint="ingress"
 ):
     if host is None:
         host = f"{name}.example.com"
     return scenario.Relation(
-        endpoint="ingress",
+        endpoint=endpoint,
         interface="ingress",
         remote_app_name=name,
         remote_app_data={
@@ -389,6 +389,22 @@ def test_sync_ingress_resources_with_tls(
                 ("remote-app2", "ingress"): ["/remote-model2-remote-app2"],
             },
         ),
+        # with multiple related apps on `ingress` and `ingress-unauthenticated`
+        (
+            [
+                generate_ingress_relation_data("remote-app0", "remote-model0"),
+                generate_ingress_relation_data(
+                    "remote-app1", "remote-model1", endpoint="ingress-unauthenticated"
+                ),
+                generate_ingress_relation_data("remote-app2", "remote-model2"),
+            ],
+            # (app-name, ingress-relation-name): [list of paths for this app],
+            {
+                ("remote-app0", "ingress"): ["/remote-model0-remote-app0"],
+                ("remote-app1", "ingress-unauthenticated"): ["/remote-model1-remote-app1"],
+                ("remote-app2", "ingress"): ["/remote-model2-remote-app2"],
+            },
+        ),
     ],
 )
 @patch(
@@ -420,9 +436,43 @@ def test_get_routes(
 
 
 @pytest.mark.parametrize(
-    "ingress_relations",
+    "ingress_relations, expected_ingress_data_sent",
     [
-        (generate_ingress_relation_data("remote-app0", "remote-model0"),),
+        # Apps related to this charm on both ingress relations
+        (
+            # List of ingress relations, using either ingress endpoint
+            (
+                generate_ingress_relation_data("remote-app0", "remote-model0"),
+                generate_ingress_relation_data(
+                    "remote-app1", "remote-model1", endpoint="ingress-unauthenticated"
+                ),
+            ),
+            # List of the "ingress" part of the ingress relation data that is sent by this charm to the remote app
+            # Each row corresponds to a specific ingress relation in the previous tuple
+            (
+                {"ingress": json.dumps({"url": "http://example.com/remote-model0-remote-app0"})},
+                {"ingress": json.dumps({"url": "http://example.com/remote-model1-remote-app1"})},
+            ),
+        ),
+        # App is related to us on multiple ingress endpoints, requiring deduplication
+        (
+            (
+                generate_ingress_relation_data("remote-app0", "remote-model0"),
+                generate_ingress_relation_data(
+                    "remote-app1", "remote-model1", endpoint="ingress-unauthenticated"
+                ),
+                generate_ingress_relation_data("remote-app2", "remote-model2"),
+                generate_ingress_relation_data(
+                    "remote-app2", "remote-model2", endpoint="ingress-unauthenticated"
+                ),
+            ),
+            (
+                {"ingress": json.dumps({"url": "http://example.com/remote-model0-remote-app0"})},
+                {"ingress": json.dumps({"url": "http://example.com/remote-model1-remote-app1"})},
+                {},  # removed because it is a duplicate
+                {},  # removed because it is a duplicate
+            ),
+        ),
     ],
 )
 @patch("charm.IstioIngressCharm._is_ready", return_value=True)
@@ -433,13 +483,17 @@ def test_ingress_e2e(
     _mock_ingress_url,
     _mock_is_ready,
     ingress_relations,
+    expected_ingress_data_sent,
     istio_ingress_charm,
     istio_ingress_context,
 ):
     """Test end-to-end operation of the charm with ingress relations.
 
-    In particular, this test is important to assert that we publish the ingress url back to related applications.  This
-    functionality is not tested elsewhere.
+    In particular, this test is important to assert that
+    * we publish the ingress url back to related applications.
+    * we handle duplicated ingress requests correctly (the charm does not break, but we do not provide an ingress)
+
+    These functionalities are not tested elsewhere.
     """
     state_out = istio_ingress_context.run(
         istio_ingress_context.on.config_changed(),
@@ -456,14 +510,7 @@ def test_ingress_e2e(
     )
 
     # Assert all relations have been told their ingress url
-    for relation in ingress_relations:
-        expected_app_data = {
-            "ingress": json.dumps(
-                {
-                    "url": f"http://{_mock_ingress_url.return_value}/{json.loads(relation.remote_app_data['model'])}-{json.loads(relation.remote_app_data['name'])}"
-                }
-            )
-        }
-        assert state_out.get_relation(relation.id).local_app_data == expected_app_data
+    for i, relation in enumerate(ingress_relations):
+        assert state_out.get_relation(relation.id).local_app_data == expected_ingress_data_sent[i]
 
     assert isinstance(state_out.unit_status, ActiveStatus)

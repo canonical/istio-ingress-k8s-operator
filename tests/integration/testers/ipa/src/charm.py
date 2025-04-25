@@ -12,7 +12,9 @@ class IPARequirerMock(CharmBase):
     def __init__(self, framework):
         super().__init__(framework)
         self.unit.set_ports(8080)
-        self.ipa = IngressPerAppRequirer(self, port=8080)
+        self.ipa = IngressPerAppRequirer(self, port=8080, relation_name="ingress")
+        # Useful for manual testing of duplicated ingresses
+        self.ipa2 = IngressPerAppRequirer(self, port=8080, relation_name="ingress-2")
 
         self.framework.observe(self.on.echo_server_pebble_ready, self._on_pebble_ready)
 

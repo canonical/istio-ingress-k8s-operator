@@ -209,6 +209,7 @@ class From(BaseModel):
 class Operation(BaseModel):
     """Operation defines the operation of the To model."""
 
+    notPaths: Optional[List[str]] = None
     ports: Optional[List[str]] = None
     paths: Optional[List[str]] = None
 

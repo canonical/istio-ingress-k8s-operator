@@ -74,7 +74,19 @@ provides:
   ingress:
     interface: ingress
     description: |
-      Provides ingress-like routing to the related Juju application, load-balancing across all units
+      Provides ingress-like routing to the related Juju application, load-balancing across all units.  If the ingress
+      has authentication configured, all paths will have authentication applied to them.  Otherwise, the paths will be
+      unauthenticated.  
+      Note that if more than one application related to either `ingress` or `ingress-unauthenticated` asks for an 
+      ingress of the same path, no route is created and the charm will go into a blocked state.
+  ingress-unauthenticated:
+    interface: ingress
+    description: |
+      Provides ingress-like routing to the related Juju application, similar to the `ingress` relation.  Unlike
+      the `ingress` relation, paths ingressed here will never have authentication applied to them, even if the ingress
+      has authentication configured.
+      Note that if more than one application related to either `ingress` or `ingress-unauthenticated` asks for an 
+      ingress of the same path, no route is created and the charm will go into a blocked state.
   metrics-endpoint:
     interface: prometheus_scrape
   istio-ingress-config:
