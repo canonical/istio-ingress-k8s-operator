@@ -105,7 +105,9 @@ async def test_relate(ops_test: OpsTest):
     await ops_test.model.add_relation(
         f"{IPA_TESTER_UNAUTHENTICATED}:ingress", "istio-ingress-k8s:ingress"
     )
-    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER, IPA_TESTER_UNAUTHENTICATED], status="active", timeout=1000)
+    await ops_test.model.wait_for_idle(
+        [APP_NAME, IPA_TESTER, IPA_TESTER_UNAUTHENTICATED], status="active", timeout=1000
+    )
 
 
 @pytest.mark.abort_on_fail
@@ -189,7 +191,9 @@ async def test_route_validity(
     await ops_test.model.applications[APP_NAME].set_config(
         {"external_hostname": external_hostname}
     )
-    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER, IPA_TESTER_UNAUTHENTICATED], status="active", timeout=1000)
+    await ops_test.model.wait_for_idle(
+        [APP_NAME, IPA_TESTER, IPA_TESTER_UNAUTHENTICATED], status="active", timeout=1000
+    )
 
     model = ops_test.model.name
     istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
