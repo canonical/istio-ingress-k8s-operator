@@ -365,16 +365,15 @@ def test_sync_ingress_resources_with_tls(
 
 
 @pytest.mark.parametrize(
-    "ingress_relations, paths_expected, unauthenticated_paths_expected",
+    "ingress_relations, paths_expected",
     [
         # no relations
-        ([], {}, []),
+        ([], {}),
         # with a single relation that has all data
         (
             [generate_ingress_relation_data("remote-app0", "remote-model0")],
             # (app-name, ingress-relation-name): [list of paths for this app],
             {("remote-app0", "ingress"): ["/remote-model0-remote-app0"]},
-            [],
         ),
         # with multiple related apps on `ingress`
         (
@@ -389,7 +388,6 @@ def test_sync_ingress_resources_with_tls(
                 ("remote-app1", "ingress"): ["/remote-model1-remote-app1"],
                 ("remote-app2", "ingress"): ["/remote-model2-remote-app2"],
             },
-            [],
         ),
         # with multiple related apps on `ingress` and `ingress-unauthenticated`
         (
@@ -406,7 +404,6 @@ def test_sync_ingress_resources_with_tls(
                 ("remote-app1", "ingress-unauthenticated"): ["/remote-model1-remote-app1"],
                 ("remote-app2", "ingress"): ["/remote-model2-remote-app2"],
             },
-            ["/remote-model1-remote-app1/*"],
         ),
     ],
 )
@@ -417,7 +414,6 @@ def test_get_routes(
     _mock_ingress_url,
     ingress_relations,
     paths_expected,
-    unauthenticated_paths_expected,
     istio_ingress_charm,
     istio_ingress_context,
 ):
@@ -431,14 +427,71 @@ def test_get_routes(
     ) as manager:
         charm: IstioIngressCharm = manager.charm
         routes = charm._get_routes()
-        unauthenticated_paths_actual = get_unauthenticated_paths(routes)
 
         # Extract the paths requested by these routes to compare to expected
         path_map_actual = {
             k: [r["prefix"] for r in route_data["routes"]] for k, route_data in routes.items()
         }
         assert path_map_actual == paths_expected
-        assert unauthenticated_paths_actual == unauthenticated_paths_expected
+
+
+@pytest.mark.parametrize(
+    "application_route_data, unauthenticated_paths_expected",
+    [
+        # no unauthenticated routes
+        ({}, []),
+        # one unauthenticated route
+        (
+            {
+                ("remote-app0", "ingress-unauthenticated"): {
+                    "routes": [{"prefix": "/remote-model0-remote-app0"}],
+                },
+            },
+            ["/remote-model0-remote-app0", "/remote-model0-remote-app0/*"],
+        ),
+        # multiple unauthenticated routes
+        (
+            {
+                ("remote-app0", "ingress-unauthenticated"): {
+                    "routes": [{"prefix": "/remote-model0-remote-app0"}],
+                },
+                ("remote-app1", "ingress-unauthenticated"): {
+                    "routes": [{"prefix": "/remote-model1-remote-app1"}],
+                },
+            },
+            [
+                "/remote-model0-remote-app0",
+                "/remote-model0-remote-app0/*",
+                "/remote-model1-remote-app1",
+                "/remote-model1-remote-app1/*",
+            ],
+        ),
+        # mixed ingress and ingress-unauthenticated
+        (
+            {
+                ("remote-app0", "ingress"): {
+                    "routes": [{"prefix": "/remote-model0-remote-app0"}],
+                },
+                ("remote-app1", "ingress-unauthenticated"): {
+                    "routes": [{"prefix": "/remote-model1-remote-app1"}],
+                },
+                ("remote-app2", "ingress-unauthenticated"): {
+                    "routes": [{"prefix": "/remote-model2-remote-app2"}],
+                },
+            },
+            [
+                "/remote-model1-remote-app1",
+                "/remote-model1-remote-app1/*",
+                "/remote-model2-remote-app2",
+                "/remote-model2-remote-app2/*",
+            ],
+        ),
+    ],
+)
+def test_get_unauthenticated_paths(application_route_data, unauthenticated_paths_expected):
+    """Test that unauthenticated paths are extracted correctly with both exact and wildcard suffixes."""
+    unauthenticated_paths_actual = get_unauthenticated_paths(application_route_data)
+    assert sorted(unauthenticated_paths_actual) == sorted(unauthenticated_paths_expected)
 
 
 @pytest.mark.parametrize(

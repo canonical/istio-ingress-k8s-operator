@@ -1235,7 +1235,8 @@ def get_unauthenticated_paths(application_route_data):
         if endpoint == INGRESS_UNAUTHENTICATED_NAME:
             for route in route_data["routes"]:
                 # Ensure subpaths are also unauthenticated by appending /*
-                unauthenticated_paths.append(route["prefix"].rstrip("/") + "/*")
+                prefix = route["prefix"].rstrip("/")
+                unauthenticated_paths.extend([prefix, prefix + "/*"])
     return unauthenticated_paths
 
 
