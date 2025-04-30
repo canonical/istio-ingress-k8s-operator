@@ -2,19 +2,21 @@
 # See LICENSE file for licensing details.
 
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
 
+import jubilant
 import pytest
 import yaml
 from helpers import (
+    ISTIO_K8S,
+    CharmDeploymentConfiguration,
     get_auth_policy_spec,
     get_configmap_data,
     get_k8s_service_address,
     get_listener_condition,
 )
-from pytest_operator.plugin import OpsTest
+from jubilant import all_active
 
 logger = logging.getLogger(__name__)
 
@@ -29,161 +31,109 @@ INGRESS_CONFIG_RELATION = "istio-ingress-config"
 FORWARD_AUTH_RELATION = "forward-auth"
 
 
-@dataclass
-class CharmDeploymentConfiguration:
-    entity_url: str  # Charm name or local path to charm
-    application_name: str
-    channel: str
-    trust: bool
-    config: Optional[dict] = None
-
-
-ISTIO_K8S = CharmDeploymentConfiguration(
-    entity_url="istio-k8s", application_name="istio-k8s", channel="latest/edge", trust=True
-)
-
 OAUTH2_K8S = CharmDeploymentConfiguration(
-    entity_url="oauth2-proxy-k8s",
-    application_name="oauth2-proxy-k8s",
+    charm="oauth2-proxy-k8s",
+    app="oauth2-proxy-k8s",
     channel="latest/edge",
     trust=True,
 )
 
 
-@pytest.mark.abort_on_fail
-async def test_deploy_dependencies(ops_test: OpsTest):
-    # Deploy Istio-k8s in a separate model and oauth2 istio-ingress-k8s in the primary model.
-    await ops_test.track_model(CORE_ISTIO_MODEL)
-    istio_core = ops_test.models.get(CORE_ISTIO_MODEL)
+@pytest.mark.setup
+def test_deploy_dependencies(juju: jubilant.Juju, juju_istio_system: jubilant.Juju):
+    """Deploys dependencies across two models: one for istio-k8s and one for the rest."""
+    juju_istio_system.deploy(**asdict(ISTIO_K8S))
 
-    await istio_core.model.deploy(**asdict(ISTIO_K8S))
-    await istio_core.model.wait_for_idle(
-        [ISTIO_K8S.application_name], status="active", timeout=1000
+    juju.deploy(**asdict(OAUTH2_K8S))
+
+    juju_istio_system.wait(lambda status: jubilant.all_active(status, ISTIO_K8S.app))
+
+    juju.wait(lambda status: jubilant.all_active(status, OAUTH2_K8S.app), timeout=300)
+
+
+def test_deployment(juju: jubilant.Juju, istio_ingress_charm):
+    juju.deploy(istio_ingress_charm, app=APP_NAME, resources=resources, trust=True)
+    juju.wait(lambda status: all_active(status, APP_NAME), timeout=120)
+
+
+def test_relations_setup(juju: jubilant.Juju, juju_istio_system: jubilant.Juju):
+    juju_istio_system.offer(
+        ISTIO_K8S.app,
+        INGRESS_CONFIG_RELATION,
     )
+    # Consume the offer
+    # TODO after https://github.com/canonical/jubilant/issues/129: Use jubilant's native consume
+    consume_args = ("consume", f"admin/{juju_istio_system.model}.{INGRESS_CONFIG_RELATION}")
+    juju.cli(*consume_args)
 
-    await ops_test.model.deploy(**asdict(OAUTH2_K8S))
-    await ops_test.model.wait_for_idle(
-        [OAUTH2_K8S.application_name], status="active", timeout=1000
-    )
+    juju.integrate(f"{OAUTH2_K8S.app}:{FORWARD_AUTH_RELATION}", APP_NAME)
+    juju.integrate(INGRESS_CONFIG_RELATION, APP_NAME)
 
-
-@pytest.mark.abort_on_fail
-async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
-    await ops_test.model.deploy(
-        istio_ingress_charm, resources=resources, application_name=APP_NAME, trust=True
-    )
-    await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=1000)
+    juju.wait(lambda status: all_active(status, APP_NAME, OAUTH2_K8S.app), timeout=300)
+    juju_istio_system.wait(lambda status: all_active(status, ISTIO_K8S.app), timeout=300)
 
 
-@pytest.mark.abort_on_fail
-async def test_relations_setup(ops_test: OpsTest):
-    istio_core = ops_test.models.get(CORE_ISTIO_MODEL)
-
-    await istio_core.model.create_offer(
-        endpoint=INGRESS_CONFIG_RELATION,
-        offer_name=INGRESS_CONFIG_RELATION,
-        application_name=ISTIO_K8S.application_name,
-    )
-    # For some reason when using the direct consume() method, it raises a File not found error
-    # await ops_test.model.consume(f"admin/{istio_core.model.name}.{INGRESS_CONFIG_RELATION}")
-
-    await ops_test.juju(
-        "consume",
-        f"admin/{istio_core.model.name}.{INGRESS_CONFIG_RELATION}",
-    )
-    await ops_test.model.add_relation(
-        f"{OAUTH2_K8S.application_name}:{FORWARD_AUTH_RELATION}", APP_NAME
-    )
-    await ops_test.model.add_relation(INGRESS_CONFIG_RELATION, APP_NAME)
-
-    await ops_test.model.wait_for_idle(
-        apps=[APP_NAME, OAUTH2_K8S.application_name], status="active", timeout=1000
-    )
-    await istio_core.model.wait_for_idle(
-        [ISTIO_K8S.application_name], status="active", timeout=1000
-    )
-
-
-@pytest.mark.abort_on_fail
-async def test_verify_initial_ext_authz_configuration(ops_test: OpsTest):
+def test_verify_initial_ext_authz_configuration(
+    juju: jubilant.Juju, juju_istio_system: jubilant.Juju
+):
     """Initial configuration verification."""
-    istio_core = ops_test.models.get(CORE_ISTIO_MODEL)
     policy_name = f"ext-authz-{APP_NAME}"
-    await assert_config_state(ops_test, istio_core, policy_name)
+    assert_config_state(juju.model, juju_istio_system.model, policy_name)
 
 
-@pytest.mark.abort_on_fail
-async def test_oauth2_proxy_relation_break_and_recovery(ops_test: OpsTest):
+def test_oauth2_proxy_relation_break_and_recovery(
+    juju: jubilant.Juju, juju_istio_system: jubilant.Juju
+):
     """Test breaking and recovering the oauth2-proxy:forward-auth relation."""
-    istio_core = ops_test.models.get(CORE_ISTIO_MODEL)
     policy_name = f"ext-authz-{APP_NAME}"
 
-    await ops_test.juju(
-        "remove-relation",
-        f"{OAUTH2_K8S.application_name}:{FORWARD_AUTH_RELATION}",
-        APP_NAME,
-    )
+    juju.remove_relation(f"{OAUTH2_K8S.app}:{FORWARD_AUTH_RELATION}", APP_NAME)
 
-    await ops_test.model.wait_for_idle(
-        apps=[APP_NAME, OAUTH2_K8S.application_name], status="active", timeout=1000
-    )
-    await istio_core.model.wait_for_idle(
-        [ISTIO_K8S.application_name], status="active", timeout=1000
-    )
+    juju.wait(lambda status: all_active(status, APP_NAME, OAUTH2_K8S.app), timeout=300)
+    juju_istio_system.wait(lambda status: all_active(status, ISTIO_K8S.app), timeout=120)
 
     # After breaking the relation, expect the policy to be removed and the extensionProviders cleared.
-    policy_spec = await get_auth_policy_spec(ops_test.model.name, policy_name)
+    policy_spec = get_auth_policy_spec(juju.model, policy_name)
     assert not policy_spec
-    mesh_config = await load_mesh_config(istio_core.model.name)
+    mesh_config = load_mesh_config(juju_istio_system.model)
     extension_providers = mesh_config.get("extensionProviders", [])
     assert not extension_providers
 
     # Re-establish the relation and verify the config state.
-    await ops_test.model.add_relation(
-        f"{OAUTH2_K8S.application_name}:{FORWARD_AUTH_RELATION}", APP_NAME
-    )
-    await ops_test.model.wait_for_idle(
-        apps=[APP_NAME, OAUTH2_K8S.application_name], status="active", timeout=1000
-    )
-    await istio_core.model.wait_for_idle(
-        [ISTIO_K8S.application_name], status="active", timeout=1000
-    )
+    juju.integrate(f"{OAUTH2_K8S.app}:{FORWARD_AUTH_RELATION}", APP_NAME)
+    juju.wait(lambda status: all_active(status, APP_NAME, OAUTH2_K8S.app), timeout=300)
+    juju_istio_system.wait(lambda status: all_active(status, ISTIO_K8S.app), timeout=120)
 
-    await assert_config_state(ops_test, istio_core, policy_name)
+    assert_config_state(juju.model, juju_istio_system.model, policy_name)
 
 
-@pytest.mark.abort_on_fail
-async def test_istio_ingress_config_relation_break_and_recovery(ops_test: OpsTest):
+def test_istio_ingress_config_relation_break_and_recovery(
+    juju: jubilant.Juju, juju_istio_system: jubilant.Juju
+):
     """Test breaking and recovering the istio-ingress-config to istio-ingress-k8s relation."""
-    istio_core = ops_test.models.get(CORE_ISTIO_MODEL)
     policy_name = f"ext-authz-{APP_NAME}"
 
-    await ops_test.juju("remove-relation", INGRESS_CONFIG_RELATION, APP_NAME)
-
+    juju.remove_relation(INGRESS_CONFIG_RELATION, APP_NAME)
     # After breaking the relation, expect the istio-ingress to be in a blocked state
-    await ops_test.model.wait_for_idle(apps=[APP_NAME], status="blocked", timeout=1000)
+    juju.wait(lambda status: jubilant.all_blocked(status, APP_NAME), timeout=300)
 
     # Gateway should be removed and ingress should be disabled
-    istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
+    istio_ingress_address = get_k8s_service_address(juju.model, "istio-ingress-k8s-istio")
     assert not istio_ingress_address
-    gateway_listener_condition = await get_listener_condition(ops_test, APP_NAME)
+    gateway_listener_condition = get_listener_condition(juju.model, APP_NAME)
     assert not gateway_listener_condition
 
     # Re-establish the relation and verify the config state.
-    await ops_test.model.add_relation(INGRESS_CONFIG_RELATION, APP_NAME)
-    await ops_test.model.wait_for_idle(
-        apps=[APP_NAME, OAUTH2_K8S.application_name], status="active", timeout=1000
-    )
-    await ops_test.models.get(CORE_ISTIO_MODEL).model.wait_for_idle(
-        [ISTIO_K8S.application_name], status="active", timeout=1000
-    )
+    juju.integrate(INGRESS_CONFIG_RELATION, APP_NAME)
+    juju.wait(lambda status: all_active(status, APP_NAME, OAUTH2_K8S.app), timeout=300)
+    juju_istio_system.wait(lambda status: all_active(status, ISTIO_K8S.app), timeout=180)
 
-    await assert_config_state(ops_test, istio_core, policy_name)
+    assert_config_state(juju.model, juju_istio_system.model, policy_name)
 
 
-async def load_mesh_config(model_name: str) -> dict:
+def load_mesh_config(model_name: str) -> dict:
     """Load and parse the mesh configuration from the Istio ConfigMap."""
-    istio_cm_data = await get_configmap_data(model_name, "istio")
+    istio_cm_data = get_configmap_data(model_name, "istio")
     assert istio_cm_data, "Failed to retrieve 'istio' ConfigMap."
 
     mesh_config_yaml = istio_cm_data.get("mesh")
@@ -206,15 +156,21 @@ def get_envoy_authz(mesh_config: dict, provider_name: str) -> dict:
     return envoy_authz
 
 
-async def assert_config_state(ops_test: OpsTest, istio_core, policy_name: str) -> None:
+def assert_config_state(primary_model: str, istio_system_model: str, policy_name: str) -> None:
     """Assert that the config state is as expected.
 
     - AuthorizationPolicy exists with action 'CUSTOM'.
     - The provider exists and its name is present.
     - The Istio mesh config contains an extensionProvider with the proper envoy config.
     - The envoyExtAuthzHttp has a matching provider.
+
+    Args:
+        primary_model: The model name for the primary components of the test
+        istio_system_model: The model name for the istio system components of the test
+        policy_name: Name of the AuthorizationPolicy resource.
+
     """
-    policy_spec = await get_auth_policy_spec(ops_test.model.name, policy_name)
+    policy_spec = get_auth_policy_spec(primary_model, policy_name)
     assert policy_spec, f"AuthorizationPolicy '{policy_name}' not found."
     assert policy_spec["action"] == "CUSTOM", f"Unexpected action {policy_spec.get('action')}"
 
@@ -222,10 +178,10 @@ async def assert_config_state(ops_test: OpsTest, istio_core, policy_name: str) -
     provider_name = provider.get("name", "")
     assert provider_name, "Provider name missing in policy."
 
-    mesh_config = await load_mesh_config(istio_core.model.name)
+    mesh_config = load_mesh_config(istio_system_model)
     envoy_authz = get_envoy_authz(mesh_config, provider_name)
 
-    expected_service = f"{OAUTH2_K8S.application_name}.{ops_test.model.name}.svc.cluster.local"
+    expected_service = f"{OAUTH2_K8S.app}.{primary_model}.svc.cluster.local"
     assert (
         envoy_authz.get("service") == expected_service
     ), f"Expected service '{expected_service}', got '{envoy_authz.get('service')}'"

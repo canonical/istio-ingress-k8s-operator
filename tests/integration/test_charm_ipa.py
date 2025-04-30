@@ -2,28 +2,27 @@
 # See LICENSE file for licensing details.
 
 import logging
-from dataclasses import asdict, dataclass
+import time
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
+import jubilant
 import pytest
 import requests
 import yaml
-from conftest import (
-    get_relation_data,
-)
 from helpers import (
+    ISTIO_K8S,
     dequote,
     get_auth_policy_spec,
     get_k8s_service_address,
     get_listener_condition,
     get_listener_spec,
+    get_relation_data,
     get_route_condition,
     send_http_request,
     send_http_request_with_custom_ca,
 )
-from juju.unit import Unit
-from pytest_operator.plugin import OpsTest
 
 logger = logging.getLogger(__name__)
 
@@ -36,87 +35,62 @@ resources = {
 }
 
 
-@dataclass
-class CharmDeploymentConfiguration:
-    entity_url: str  # aka charm name or local path to charm
-    application_name: str
-    channel: str
-    trust: bool
-    config: Optional[dict] = None
-
-
-ISTIO_K8S = CharmDeploymentConfiguration(
-    entity_url="istio-k8s", application_name="istio-k8s", channel="latest/edge", trust=True
-)
-
-
-@pytest.mark.abort_on_fail
-async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
+@pytest.mark.setup
+def test_deploy_dependencies(
+    juju: jubilant.Juju, juju_istio_system: jubilant.Juju, ipa_tester_charm
+):
     """Deploys dependencies across two models: one for Istio and one for ipa-tester.
 
     This test uses a multi-model approach to isolate Istio and the ipa-tester in
     separate Kubernetes namespaces. It deploys Istio in the 'istio-core' model
     and ipa-tester in the main test model.
     """
-    # Instantiate a second model for istio-core.  ops_test automatically gives it a unique name,
-    # but we provide a user-friendly alias of "istio-core"
-    await ops_test.track_model("istio-core")
-    istio_core = ops_test.models.get("istio-core")
+    # Deploy Istio-k8s in a side model
+    juju_istio_system.deploy(**asdict(ISTIO_K8S))
 
-    # Deploy Istio-k8s
-    await istio_core.model.deploy(**asdict(ISTIO_K8S))
-    await istio_core.model.wait_for_idle(
-        [
-            ISTIO_K8S.application_name,
-        ],
-        status="active",
-        timeout=1000,
-    )
-
-    # Deploy ipa-testers
-    await ops_test.model.deploy(
+    # And testers in the primary model
+    juju.deploy(
         ipa_tester_charm,
-        application_name=IPA_TESTER,
+        app=IPA_TESTER,
         resources={"echo-server-image": "jmalloc/echo-server:v0.3.7"},
     )
-    await ops_test.model.deploy(
+    juju.deploy(
         ipa_tester_charm,
-        application_name=IPA_TESTER_UNAUTHENTICATED,
+        app=IPA_TESTER_UNAUTHENTICATED,
         resources={"echo-server-image": "jmalloc/echo-server:v0.3.7"},
     )
-    await ops_test.model.wait_for_idle(
-        [IPA_TESTER, IPA_TESTER_UNAUTHENTICATED],
-        status="active",
-        timeout=1000,
+
+    # Then wait for everything to be up
+    juju.wait(
+        lambda status: jubilant.all_active(status, IPA_TESTER, IPA_TESTER_UNAUTHENTICATED),
+        timeout=120,
+    )
+    juju_istio_system.wait(lambda status: jubilant.all_active(status, ISTIO_K8S.app), timeout=120)
+
+
+@pytest.mark.setup
+def test_deployment(juju: jubilant.Juju, istio_ingress_charm):
+    juju.deploy(istio_ingress_charm, app=APP_NAME, resources=resources, trust=True)
+    juju.wait(lambda status: jubilant.all_active(status, APP_NAME), timeout=120)
+
+
+def test_relate(juju: jubilant.Juju):
+    juju.integrate(f"{IPA_TESTER}:ingress", "istio-ingress-k8s:ingress")
+    juju.integrate(f"{IPA_TESTER_UNAUTHENTICATED}:ingress", "istio-ingress-k8s:ingress")
+    juju.wait(
+        lambda status: jubilant.all_active(
+            status, APP_NAME, IPA_TESTER, IPA_TESTER_UNAUTHENTICATED
+        ),
+        timeout=120,
     )
 
 
-@pytest.mark.abort_on_fail
-async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
-    await ops_test.model.deploy(
-        istio_ingress_charm, resources=resources, application_name=APP_NAME, trust=True
-    ),
-    await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=1000)
-
-
-@pytest.mark.abort_on_fail
-async def test_relate(ops_test: OpsTest):
-    await ops_test.model.add_relation(f"{IPA_TESTER}:ingress", "istio-ingress-k8s:ingress")
-    await ops_test.model.add_relation(
-        f"{IPA_TESTER_UNAUTHENTICATED}:ingress", "istio-ingress-k8s:ingress"
-    )
-    await ops_test.model.wait_for_idle(
-        [APP_NAME, IPA_TESTER, IPA_TESTER_UNAUTHENTICATED], status="active", timeout=1000
-    )
-
-
-@pytest.mark.abort_on_fail
-async def test_ipa_charm_has_ingress(ops_test: OpsTest):
+def test_ipa_charm_has_ingress(juju: jubilant.Juju):
     """Spot check directly on the relation data that we have provided an ingress."""
     data = get_relation_data(
+        juju=juju,
         requirer_endpoint="ipa-tester/0:ingress",
         provider_endpoint="istio-ingress-k8s/0:ingress",
-        model=ops_test.model_full_name,
     )
 
     provider_app_data = yaml.safe_load(data.provider.application_data["ingress"])
@@ -125,19 +99,18 @@ async def test_ipa_charm_has_ingress(ops_test: OpsTest):
     requirer_app_data = data.requirer.application_data
     model = dequote(requirer_app_data["model"])
 
-    istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
+    istio_ingress_address = get_k8s_service_address(juju.model, "istio-ingress-k8s-istio")
 
     assert url == f"http://{istio_ingress_address}/{model}-ipa-tester"
 
 
-@pytest.mark.abort_on_fail
-async def test_auth_policy_validity(ops_test: OpsTest):
+def test_auth_policy_validity(juju: jubilant.Juju):
     for ipa_tester in [IPA_TESTER, IPA_TESTER_UNAUTHENTICATED]:
 
-        policy_name = f"{ipa_tester}-{APP_NAME}-{ops_test.model.name}-l4"
+        policy_name = f"{ipa_tester}-{APP_NAME}-{juju.model}-l4"
 
         # Retrieve the AuthorizationPolicy spec
-        policy_spec = await get_auth_policy_spec(ops_test.model.name, policy_name)
+        policy_spec = get_auth_policy_spec(juju.model, policy_name)
 
         # Ensure the policy spec is not None
         assert policy_spec is not None, f"AuthorizationPolicy '{policy_name}' not found."
@@ -162,7 +135,7 @@ async def test_auth_policy_validity(ops_test: OpsTest):
         principals = from_rules[0]["source"].get("principals", [])
         assert len(principals) == 1, "Expected exactly one principal in the 'source' field."
         assert (
-            principals[0] == f"cluster.local/ns/{ops_test.model.name}/sa/istio-ingress-k8s-istio"
+            principals[0] == f"cluster.local/ns/{juju.model}/sa/istio-ingress-k8s-istio"
         ), "Principal does not match expected format."
 
         # Validate 'selector' field
@@ -175,7 +148,6 @@ async def test_auth_policy_validity(ops_test: OpsTest):
         ), "AuthorizationPolicy selector does not match the expected app name."
 
 
-@pytest.mark.abort_on_fail
 @pytest.mark.parametrize(
     "external_hostname, expected_hostname",
     [
@@ -184,30 +156,30 @@ async def test_auth_policy_validity(ops_test: OpsTest):
         ("", None),  # Remove hostname
     ],
 )
-async def test_route_validity(
-    ops_test: OpsTest, external_hostname: str, expected_hostname: Optional[str]
+def test_route_validity(
+    juju: jubilant.Juju, external_hostname: str, expected_hostname: Optional[str]
 ):
     """Test that routes to apps related on the ingress and ingress-unauthenticated endpoints work as expected."""
-    await ops_test.model.applications[APP_NAME].set_config(
-        {"external_hostname": external_hostname}
-    )
-    await ops_test.model.wait_for_idle(
-        [APP_NAME, IPA_TESTER, IPA_TESTER_UNAUTHENTICATED], status="active", timeout=1000
+    juju.config(APP_NAME, {"external_hostname": external_hostname})
+    juju.wait(
+        lambda status: jubilant.all_active(
+            status, APP_NAME, IPA_TESTER, IPA_TESTER_UNAUTHENTICATED
+        ),
+        timeout=120,
     )
 
-    model = ops_test.model.name
-    istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
+    istio_ingress_address = get_k8s_service_address(juju.model, f"{APP_NAME}-istio")
 
-    listener_condition = await get_listener_condition(ops_test, "istio-ingress-k8s")
-    listener_spec = await get_listener_spec(ops_test, "istio-ingress-k8s")
+    listener_condition = get_listener_condition(juju.model, "istio-ingress-k8s")
+    listener_spec = get_listener_spec(juju.model, "istio-ingress-k8s")
 
     assert listener_condition["attachedRoutes"] == 2
     assert listener_condition["conditions"][0]["message"] == "No errors found"
     assert listener_condition["conditions"][0]["reason"] == "Accepted"
 
     for ipa_tester in [IPA_TESTER, IPA_TESTER_UNAUTHENTICATED]:
-        tester_url = f"http://{istio_ingress_address}/{model}-{ipa_tester}"
-        route_condition = await get_route_condition(ops_test, f"{ipa_tester}-http-{APP_NAME}")
+        tester_url = f"http://{istio_ingress_address}/{juju.model}-{ipa_tester}"
+        route_condition = get_route_condition(juju.model, f"{ipa_tester}-http-{APP_NAME}")
 
         assert route_condition["conditions"][0]["message"] == "Route was valid"
         assert route_condition["conditions"][0]["reason"] == "Accepted"
@@ -224,7 +196,7 @@ async def test_route_validity(
 
 
 @pytest.fixture(scope="module")
-async def deploy_and_relate_certificate_provider(ops_test: OpsTest):
+def deploy_and_relate_certificate_provider(juju: jubilant.Juju):
     """Deploy the self-signed-certificates charm to the primary model and relate it to istio-ingress-k8s.
 
     Returns the certificate provider's application name.
@@ -233,16 +205,12 @@ async def deploy_and_relate_certificate_provider(ops_test: OpsTest):
     """
     # Deploy and relate to a certificate provider
     self_signed_certificates = "self-signed-certificates"
-    await ops_test.model.deploy(self_signed_certificates)
-    await ops_test.model.add_relation(
-        f"{self_signed_certificates}:certificates", f"{APP_NAME}:certificates"
-    )
+    juju.deploy(self_signed_certificates)
+    juju.integrate(f"{self_signed_certificates}:certificates", f"{APP_NAME}:certificates")
     yield self_signed_certificates
-    # TODO: Should we remove this application after yield?  As is, we leave the test with TLS enabled.  Given that its
-    #  module scope, removing it here might not actually fire till the end of the test suite anyway.  Not sure.
+    juju.remove_application(self_signed_certificates, destroy_storage=True)
 
 
-@pytest.mark.abort_on_fail
 @pytest.mark.parametrize(
     "external_hostname",
     [
@@ -252,52 +220,58 @@ async def deploy_and_relate_certificate_provider(ops_test: OpsTest):
         "foo.bar",
     ],
 )
-@pytest.mark.abort_on_fail
-async def test_gateway_with_tls(
-    external_hostname, ops_test: OpsTest, deploy_and_relate_certificate_provider
+def test_gateway_with_tls(
+    external_hostname, juju: jubilant.Juju, deploy_and_relate_certificate_provider
 ):
     """Test that, when connected to a TLS cert provider, the gateway is configured with TLS and http is redirected."""
     self_signed_certificates = deploy_and_relate_certificate_provider
 
-    await ops_test.model.applications[APP_NAME].set_config(
-        {"external_hostname": external_hostname}
-    )
+    juju.config(APP_NAME, {"external_hostname": external_hostname})
 
     # Wait for everything to settle before obtaining the ca_certificate
-    await ops_test.model.wait_for_idle(
-        [APP_NAME, IPA_TESTER, self_signed_certificates], status="active", timeout=1000
+    juju.wait(
+        lambda status: jubilant.all_active(status, APP_NAME, IPA_TESTER, self_signed_certificates),
+        timeout=300,
     )
-    ca_certificate = await get_ca_certificate(
-        ops_test.model.units[f"{self_signed_certificates}/0"]
-    )
+    ca_certificate_task = juju.run(f"{self_signed_certificates}/0", "get-ca-certificate")
+    ca_certificate = ca_certificate_task.results["ca-certificate"]
 
     # Build the ingress URL
-    model = ops_test.model.name
-    istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
-    tester_url = f"{istio_ingress_address}/{model}-{IPA_TESTER}"
+    istio_ingress_address = get_k8s_service_address(juju.model, "istio-ingress-k8s-istio")
+    tester_url = f"{istio_ingress_address}/{juju.model}-{IPA_TESTER}"
     tester_url_http = f"http://{tester_url}"
 
     # If the ingress is configured to use a hostname, set the Host header
     headers = {}
-    hostname = (await ops_test.model.applications[APP_NAME].get_config())["external_hostname"].get(
-        "value", None
-    )
+    hostname = juju.config(APP_NAME).get("external_hostname", None)
     if hostname:
         headers["Host"] = hostname
 
     # Assert that http request is redirected to https
-    resp = requests.get(url=tester_url_http, headers=headers, allow_redirects=False)
-    assert resp.status_code == 301, "http request was not redirected to https"
-    assert resp.headers.get("Location").startswith(
-        "https://"
-    ), "http request was not redirected to https"
+    # This is a bit racey with istio's pushing of configuration, so we retry it a few times.
+    # Anything more than a few seconds here means something went wrong
+    max_retries = 5
+    for i in range(max_retries):
+        try:
+            resp = requests.get(url=tester_url_http, headers=headers, allow_redirects=False)
+            assert resp.status_code == 301, "http request was not redirected to https"
+            assert resp.headers.get("Location").startswith(
+                "https://"
+            ), "http request was not redirected to https"
+            break
+        except AssertionError as e:
+            if i == max_retries - 1:
+                raise e
+            logger.info(f"Failed to confirm http redirection on attempt {i+1}/{max_retries}.")
+            time.sleep(5)
+            continue
 
     # Assert that https request works with the given ca-bundle
     if hostname:
-        url = f"https://{hostname}/{model}-{IPA_TESTER}"
+        url = f"https://{hostname}/{juju.model}-{IPA_TESTER}"
         resolve_netloc_to_ip = istio_ingress_address
     else:
-        url = f"https://{istio_ingress_address}/{model}-{IPA_TESTER}"
+        url = f"https://{istio_ingress_address}/{juju.model}-{IPA_TESTER}"
         resolve_netloc_to_ip = None
     assert (
         send_http_request_with_custom_ca(
@@ -307,14 +281,7 @@ async def test_gateway_with_tls(
     ), "Failed to send request to endpoint with custom CA"
 
 
-async def get_ca_certificate(unit: Unit) -> str:
-    """Return the CA certificate from a self-signed-certificate unit using the get-ca-certificate action."""
-    action = await unit.run_action("get-ca-certificate")
-    result = await action.wait()
-    return result.results["ca-certificate"]
-
-
-@pytest.mark.abort_on_fail
-async def test_remove_relation(ops_test: OpsTest):
-    await ops_test.juju("remove-relation", "ipa-tester:ingress", "istio-ingress-k8s:ingress")
-    await ops_test.model.wait_for_idle([APP_NAME, IPA_TESTER], status="active")
+@pytest.mark.teardown
+def test_remove_relation(juju: jubilant.Juju):
+    juju.remove_relation(f"{IPA_TESTER}:ingress", "istio-ingress-k8s:ingress")
+    juju.wait(lambda status: jubilant.all_active(status, APP_NAME, IPA_TESTER))
