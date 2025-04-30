@@ -1,17 +1,35 @@
+import dataclasses
 import logging
 import ssl
 from typing import Any, Dict, Optional, cast
 from urllib.parse import urlparse
 
+import jubilant
 import lightkube
 import requests
+import yaml
 from lightkube.generic_resource import create_namespaced_resource
 from lightkube.resources.autoscaling_v2 import HorizontalPodAutoscaler
 from lightkube.resources.core_v1 import ConfigMap, Service
-from pytest_operator.plugin import OpsTest
 from requests.adapters import DEFAULT_POOLBLOCK, DEFAULT_POOLSIZE, DEFAULT_RETRIES, HTTPAdapter
 
 logger = logging.getLogger(__name__)
+
+_JUJU_KEYS = ("egress-subnets", "ingress-address", "private-address")
+
+
+@dataclasses.dataclass()
+class CharmDeploymentConfiguration:
+    charm: str  # aka charm name or local path to charm
+    app: str
+    channel: str
+    trust: bool
+    config: Optional[dict] = None
+
+
+ISTIO_K8S = CharmDeploymentConfiguration(
+    charm="istio-k8s", app="istio-k8s", channel="latest/edge", trust=True
+)
 
 
 RESOURCE_TYPES = {
@@ -30,20 +48,19 @@ RESOURCE_TYPES = {
 }
 
 
-async def get_k8s_service_address(ops_test: OpsTest, service_name: str) -> Optional[str]:
+def get_k8s_service_address(namespace: str, service_name: str) -> Optional[str]:
     """Get the address of a LoadBalancer Kubernetes service using kubectl.
 
     Args:
-        ops_test: pytest-operator plugin
+        namespace: The namespace of the Kubernetes resource
         service_name: The name of the Kubernetes service
 
     Returns:
         The LoadBalancer service address as a string, or None if not found
     """
-    model = ops_test.model.info
     try:
         c = lightkube.Client()
-        svc = c.get(Service, namespace=model.name, name=service_name)
+        svc = c.get(Service, namespace=namespace, name=service_name)
         return svc.status.loadBalancer.ingress[0].ip
 
     except Exception as e:
@@ -51,20 +68,19 @@ async def get_k8s_service_address(ops_test: OpsTest, service_name: str) -> Optio
         return None
 
 
-async def get_listener_condition(ops_test: OpsTest, gateway_name: str) -> Optional[Dict[str, Any]]:
+def get_listener_condition(namespace: str, gateway_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve the status of the listener from the Gateway resource as a dictionary.
 
     Args:
-        ops_test: pytest-operator plugin
+        namespace: The namespace of the Kubernetes resource
         gateway_name: Name of the Gateway resource.
 
     Returns:
         A dictionary representing the status of the first listener, or None if not found.
     """
-    model = ops_test.model.info
     try:
         c = lightkube.Client()
-        gateway = c.get(RESOURCE_TYPES["Gateway"], namespace=model.name, name=gateway_name)
+        gateway = c.get(RESOURCE_TYPES["Gateway"], namespace=namespace, name=gateway_name)
         return cast(dict, gateway.status["listeners"][0])
 
     except Exception as e:
@@ -72,20 +88,19 @@ async def get_listener_condition(ops_test: OpsTest, gateway_name: str) -> Option
         return None
 
 
-async def get_listener_spec(ops_test: OpsTest, gateway_name: str) -> Optional[Dict[str, Any]]:
+def get_listener_spec(namespace: str, gateway_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve the spec of the listener from the Gateway resource as a dictionary.
 
     Args:
-        ops_test: pytest-operator plugin
+        namespace: The namespace of the Kubernetes resource
         gateway_name: Name of the Gateway resource.
 
     Returns:
         A dictionary representing the spec of the first listener, or None if not found.
     """
-    model = ops_test.model.info
     try:
         c = lightkube.Client()
-        gateway = c.get(RESOURCE_TYPES["Gateway"], namespace=model.name, name=gateway_name)
+        gateway = c.get(RESOURCE_TYPES["Gateway"], namespace=namespace, name=gateway_name)
         return gateway.spec["listeners"][0]
 
     except Exception as e:
@@ -93,20 +108,19 @@ async def get_listener_spec(ops_test: OpsTest, gateway_name: str) -> Optional[Di
         return None
 
 
-async def get_route_spec(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any]]:
+def get_route_spec(namespace: str, route_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve and check the spec of the HTTPRoute resource.
 
     Args:
-        ops_test: pytest-operator plugin
+        namespace: The namespace of the Kubernetes resource
         route_name: Name of the HTTPRoute resource.
 
     Returns:
         A dictionary representing the spec of the route, or None if not found.
     """
-    model = ops_test.model.info
     try:
         c = lightkube.Client()
-        route = c.get(RESOURCE_TYPES["HTTPRoute"], namespace=model.name, name=route_name)
+        route = c.get(RESOURCE_TYPES["HTTPRoute"], namespace=namespace, name=route_name)
         return route.spec
 
     except Exception as e:
@@ -114,11 +128,11 @@ async def get_route_spec(ops_test: OpsTest, route_name: str) -> Optional[Dict[st
         return None
 
 
-async def get_auth_policy_spec(model_name: str, policy_name: str) -> Optional[Dict[str, Any]]:
+def get_auth_policy_spec(namespace: str, policy_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve and check the spec of the AuthorizationPolicy resource.
 
     Args:
-        model_name: Name of the juju model.
+        namespace: The namespace of the Kubernetes resource
         policy_name: Name of the AuthorizationPolicy resource.
 
     Returns:
@@ -127,7 +141,7 @@ async def get_auth_policy_spec(model_name: str, policy_name: str) -> Optional[Di
     try:
         c = lightkube.Client()
         policy = c.get(
-            RESOURCE_TYPES["AuthorizationPolicy"], namespace=model_name, name=policy_name
+            RESOURCE_TYPES["AuthorizationPolicy"], namespace=namespace, name=policy_name
         )
         return policy.spec
 
@@ -136,11 +150,11 @@ async def get_auth_policy_spec(model_name: str, policy_name: str) -> Optional[Di
         return None
 
 
-async def get_configmap_data(model_name: str, cm_name: str) -> Optional[Dict[str, Any]]:
+def get_configmap_data(namespace: str, cm_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve and check the data of the ConfigMap resource.
 
     Args:
-        model_name: Name of the juju model.
+        namespace: The namespace of the Kubernetes resource
         cm_name: Name of the ConfigMap resource.
 
     Returns:
@@ -148,7 +162,7 @@ async def get_configmap_data(model_name: str, cm_name: str) -> Optional[Dict[str
     """
     try:
         c = lightkube.Client()
-        cm = c.get(ConfigMap, name=cm_name, namespace=model_name)
+        cm = c.get(ConfigMap, name=cm_name, namespace=namespace)
         return cm.data
 
     except Exception as e:
@@ -156,31 +170,30 @@ async def get_configmap_data(model_name: str, cm_name: str) -> Optional[Dict[str
         return None
 
 
-async def get_route_condition(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any]]:
+def get_route_condition(namespace, route_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve and check the condition from the HTTPRoute resource.
 
     Args:
-        ops_test: pytest-operator plugin
+        namespace: Name of the Kubernetes namespace.
         route_name: Name of the HTTPRoute resource.
 
     Returns:
         A dictionary representing the status of the parent gateway the route is attached to, or None if not found.
     """
-    model = ops_test.model.name
     try:
         c = lightkube.Client()
-        route = c.get(RESOURCE_TYPES["HTTPRoute"], namespace=model, name=route_name)
+        route = c.get(RESOURCE_TYPES["HTTPRoute"], namespace=namespace, name=route_name)
         return cast(dict, route.status["parents"][0])
     except Exception as e:
         logger.error("Error retrieving HTTPRoute condition: %s", e, exc_info=1)
         return None
 
 
-async def get_hpa(namespace: str, hpa_name: str) -> Optional[HorizontalPodAutoscaler]:
+def get_hpa(namespace: str, hpa_name: str) -> Optional[HorizontalPodAutoscaler]:
     """Retrieve the HPA resource so we can inspect .spec and .status directly.
 
     Args:
-        namespace: Namespace of the HPA resource.
+        namespace: The namespace of the Kubernetes resource
         hpa_name: Name of the HPA resource.
 
     Returns:
@@ -317,3 +330,152 @@ class DNSResolverHTTPSAdapter(HTTPAdapter):
                 connection_pool_kwargs.pop("assert_hostname", None)
 
         return super().send(request, stream, timeout, verify, cert, proxies)
+
+
+def scale_application(juju: jubilant.Juju, app: str, scale: int):
+    args = ["scale-application", app, str(scale)]
+    juju.cli(*args)
+
+
+@dataclasses.dataclass()
+class UnitRelationData:
+    unit_name: str
+    endpoint: str
+    leader: bool
+    application_data: Dict[str, str]
+    unit_data: Dict[str, str]
+
+
+def remove_default_unit_data_keys(data: dict):
+    """Remove the default keys added to all relations, editing data in place."""
+    for key in _JUJU_KEYS:
+        if key in data:
+            del data[key]
+
+
+def get_content(
+    juju: jubilant.Juju, app: str, other_app, include_default_juju_keys: bool = False
+) -> UnitRelationData:
+    """Get the content of the databag of `obj`, as seen from `other_obj`."""
+    unit_name, endpoint = app.split(":")
+    other_unit_name, other_endpoint = other_app.split(":")
+
+    unit_data, app_data, leader = get_databags(
+        juju, unit_name, endpoint, other_unit_name, other_endpoint
+    )
+
+    if not include_default_juju_keys:
+        remove_default_unit_data_keys(unit_data)
+
+    return UnitRelationData(unit_name, endpoint, leader, app_data, unit_data)
+
+
+def get_databags(juju: jubilant.Juju, local_unit, local_endpoint, remote_unit, remote_endpoint):
+    """Get the databags of local unit and its leadership status.
+
+    Given a remote unit and the remote endpoint name.
+
+    Args:
+        juju: A jubilant.Juju configured to the model containing both local and remote units
+        local_unit: Name of the local unit
+        local_endpoint: Name of the local endpoint
+        remote_unit: Name of the remote unit
+        remote_endpoint: Name of the remote endpoint
+    """
+    local_data = get_unit_info(juju, local_unit)
+    leader = local_data["leader"]
+
+    remote_data = get_unit_info(juju, remote_unit)
+    relation_info = remote_data.get("relation-info")
+    if not relation_info:
+        raise RuntimeError(f"{remote_unit} has no relations")
+
+    raw_data = get_relation_by_endpoint(relation_info, local_endpoint, remote_endpoint, local_unit)
+    unit_data = raw_data["related-units"][local_unit]["data"]
+    app_data = raw_data["application-data"]
+    return unit_data, app_data, leader
+
+
+def get_unit_info(juju: jubilant.Juju, unit_name: str) -> dict:
+    """Return unit-info data structure as a dictionary.
+
+    for example:
+
+    istio-ingress-k8s/0:
+      opened-ports: []
+      charm: local:focal/istio-ingress-k8s-1
+      leader: true
+      relation-info:
+      - endpoint: ingress-per-unit
+        related-endpoint: ingress
+        application-data:
+          _supported_versions: '- v1'
+        related-units:
+          prometheus-k8s/0:
+            in-scope: true
+            data:
+              egress-subnets: 10.152.183.150/32
+              ingress-address: 10.152.183.150
+              private-address: 10.152.183.150
+      provider-id: istio-ingress-k8s-0
+      address: 10.1.232.144
+    """
+    args = ("show-unit", unit_name)
+    raw_data = juju.cli(*args)
+    data = yaml.safe_load(raw_data)
+
+    try:
+        return data[unit_name]
+    except KeyError as e:
+        raise KeyError(f"Unit {unit_name} not found") from e
+
+
+def get_relation_by_endpoint(relations, local_endpoint, remote_endpoint, remote_obj):
+    matches = [
+        r
+        for r in relations
+        if (
+            (r["endpoint"] == local_endpoint and r["related-endpoint"] == remote_endpoint)
+            or (r["endpoint"] == remote_endpoint and r["related-endpoint"] == local_endpoint)
+        )
+        and remote_obj in r["related-units"]
+    ]
+    if not matches:
+        raise ValueError(
+            f"no matches found with endpoint=="
+            f"{local_endpoint} "
+            f"in {remote_obj} (matches={matches})"
+        )
+    if len(matches) > 1:
+        raise ValueError(
+            "multiple matches found with endpoint=="
+            f"{local_endpoint} "
+            f"in {remote_obj} (matches={matches})"
+        )
+    return matches[0]
+
+
+@dataclasses.dataclass()
+class RelationData:
+    provider: UnitRelationData
+    requirer: UnitRelationData
+
+
+def get_relation_data(
+    *,
+    juju: jubilant.Juju,
+    provider_endpoint: str,
+    requirer_endpoint: str,
+    include_default_juju_keys: bool = False,
+):
+    """Get relation databags for a juju relation.
+
+    >>> get_relation_data('prometheus/0:ingress', 'istio-ingress/1:ingress-per-unit')
+    """
+    provider_data = get_content(
+        juju, provider_endpoint, requirer_endpoint, include_default_juju_keys
+    )
+    requirer_data = get_content(
+        juju, requirer_endpoint, provider_endpoint, include_default_juju_keys
+    )
+    return RelationData(provider=provider_data, requirer=requirer_data)

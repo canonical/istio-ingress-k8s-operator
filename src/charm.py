@@ -761,6 +761,12 @@ class IstioIngressCharm(CharmBase):
         # Reconcile HPA and gateway resources
 
         self._sync_gateway_resources()
+
+        # TODO: DO NOT COMMIT
+        if self.model.app.planned_units() == 0:
+            # We are scaling to 0.  Should we proceed?
+            return
+
         self.unit.status = MaintenanceStatus("Validating gateway readiness")
         if not self._is_ready():
             return
