@@ -1,6 +1,36 @@
 # Copyright 2024 Canonical Ltd.
 # See LICENSE file for licensing details.
+[project]
+name = "istio-ingress-k8s"
+version = "0.0"
+requires-python = "~=3.8"   
+dependencies = [
+    "ops~=2.5",
+    "pydantic>=2",
+    "lightkube-extensions@git+https://github.com/canonical/lightkube-extensions.git@main",
+    "cosl",
+    "cryptography~=42.0.0", # Deps: tls_certificates_interface libs
+    "opentelemetry-exporter-otlp-proto-http==1.21.0", # PYDEPS: lib/charms/tempo_coordinator_k8s/v0/charm_tracing.py
+    "jsonschema>=4.22.0", # Deps: traefik_k8s libs, tls_certificates_interface libs
+]
 
+[project.optional-dependencies]
+dev = [
+    # Linting
+    "ruff",
+    # Static
+    "pyright",
+    # Unit
+    "pytest",
+    "coverage[toml]",
+    "pytest-mock",
+    "ops-scenario",
+    # Integration
+    "pytest-asyncio",
+    "pytest-operator",
+    "juju",
+    "requests",
+]
 
 # Testing tools configuration
 [tool.coverage.run]
@@ -13,6 +43,7 @@ show_missing = true
 minversion = "6.0"
 log_cli_level = "INFO"
 asyncio_mode = "auto"
+addopts = "--tb=native --verbose --capture=no --log-cli-level=INFO"
 
 # Formatting tools configuration
 [tool.black]
@@ -44,8 +75,13 @@ ignore = ["E501", "D107"]
 # names like "notHosts" would fail the linting check.
 per-file-ignores = {"tests/*" = ["D100","D101","D102","D103","D104","D401"], "src/models.py" = ["N815"]}
 
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
 [tool.codespell]
 skip = "build,lib,venv,icon.svg,.tox,.git,.mypy_cache,.ruff_cache,.coverage"
+ignore-words-list = "assertIn"
 
 [tool.pyright]
+extraPaths = ["src", "lib"]
 include = ["src/**.py"]

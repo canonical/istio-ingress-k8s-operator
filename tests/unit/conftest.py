@@ -6,8 +6,11 @@
 from unittest.mock import patch
 
 import pytest
+import scenario
 from charms.tempo_coordinator_k8s.v0 import charm_tracing
 from lightkube import Client
+
+from charm import IstioIngressCharm
 
 
 @pytest.fixture(autouse=True)
@@ -25,3 +28,12 @@ def mock_lightkube_client():
                 with patch.object(Client, "patch"):
                     with patch.object(Client, "list"):
                         yield
+
+@pytest.fixture()
+def istio_ingress_charm():
+    yield IstioIngressCharm
+
+
+@pytest.fixture()
+def istio_ingress_context(istio_ingress_charm):
+    yield scenario.Context(charm_type=istio_ingress_charm)

@@ -62,19 +62,13 @@ def timed_memoizer(func):
 
 @pytest.fixture(scope="module")
 @timed_memoizer
-async def istio_ingress_charm(ops_test: OpsTest):
-    count = 0
-    while True:
-        try:
-            charm = await ops_test.build_charm(".", verbosity="debug")
-            return charm
-        except RuntimeError:
-            logger.warning("Failed to build istio-ingress. Trying again!")
-            count += 1
+async def istio_ingress_charm(ops_test: OpsTest) -> Path:
+    """Grafana charm used for integration testing."""
+    if charm_file := os.environ.get("CHARM_PATH"):
+        return Path(charm_file)
 
-            if count == 3:
-                raise
-
+    charm = await ops_test.build_charm(".")
+    return charm
 
 @pytest.fixture(scope="module", autouse=True)
 def copy_traefik_library_into_tester_charms(ops_test: OpsTest):
