@@ -14,11 +14,10 @@ bases:
 parts:
   charm:
     charm-binary-python-packages:
-      - ops
-      - requests
-      - pydantic-core
-      - pydantic
-      - maturin
+      - cryptography
+      - pydantic>=2
+
+
 requires:
   ingress:
     interface: ingress
