@@ -15,10 +15,10 @@ parts:
   charm:
     charm-binary-python-packages:
       - ops
-    build-packages:
-      - git
-      - cargo
-      - rustc
+      - requests
+      - pydantic-core
+      - pydantic
+      - maturin
 requires:
   ingress:
     interface: ingress
