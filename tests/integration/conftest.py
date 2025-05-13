@@ -63,7 +63,7 @@ def timed_memoizer(func):
 @pytest.fixture(scope="module")
 @timed_memoizer
 async def istio_ingress_charm(ops_test: OpsTest) -> Path:
-    """Grafana charm used for integration testing."""
+    """Istio Ingress charm used for integration testing."""
     if charm_file := os.environ.get("CHARM_PATH"):
         return Path(charm_file)
 
