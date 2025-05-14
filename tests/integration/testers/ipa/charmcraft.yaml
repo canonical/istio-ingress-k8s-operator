@@ -1,5 +1,8 @@
 # Copyright 2022 Canonical Ltd.
 # See LICENSE file for licensing details.
+name: ipa-requirer-mock
+description: ipa tester
+summary: ipa tester
 type: charm
 bases:
   - build-on:
@@ -11,8 +14,25 @@ bases:
 parts:
   charm:
     charm-binary-python-packages:
-      - ops
-    build-packages:
-      - git
-      - cargo
-      - rustc
+      - cryptography
+      - jsonschema
+      - pydantic>=2
+
+
+requires:
+  ingress:
+    interface: ingress
+    limit: 1
+  ingress-2:
+    interface: ingress
+    limit: 1
+
+containers:
+  echo-server:
+    resource: echo-server-image
+
+resources:
+  echo-server-image:
+    type: oci-image
+    description: OCI image for echo server
+    upstream-source: jmalloc/echo-server:v0.3.7

@@ -8,23 +8,19 @@ description: |
 assumes:
   - k8s-api
 
-bases:
-  - build-on:
-    - name: ubuntu
-      channel: "22.04"
-      architectures: ["amd64"]
-    run-on:
-    - name: ubuntu
-      channel: "22.04"
-      architectures: ["amd64"]
-  - build-on:
-    - name: ubuntu
-      channel: "22.04"
-      architectures: ["arm64"]
-    run-on:
-    - name: ubuntu
-      channel: "22.04"
-      architectures: ["arm64"]
+platforms:
+  ubuntu@24.04:amd64:
+  ubuntu@24.04:arm64:
+
+parts:
+  charm:
+    source: .
+    plugin: uv
+    build-packages: [git]
+    build-snaps: [astral-uv]
+    override-build: |
+      craftctl default
+      git describe --always > $CRAFT_PART_INSTALL/version
 
 charm-libs:
   - lib: "tls_certificates_interface.tls_certificates"
@@ -32,15 +28,6 @@ charm-libs:
   - lib: "observability-libs.cert_handler"
     version: '1'
 
-parts:
-  charm:
-    build-packages: [ git ]
-    charm-binary-python-packages:
-      - "pydantic>=2"
-      - "pydantic-core"
-      - "cryptography"
-      - "jsonschema"
-      - "opentelemetry-exporter-otlp-proto-http==1.21.0"
       
 containers:
   metrics-proxy:

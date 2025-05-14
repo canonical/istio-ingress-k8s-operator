@@ -62,40 +62,29 @@ def timed_memoizer(func):
 
 @pytest.fixture(scope="module")
 @timed_memoizer
-async def istio_ingress_charm(ops_test: OpsTest):
-    count = 0
-    while True:
-        try:
-            charm = await ops_test.build_charm(".", verbosity="debug")
-            return charm
-        except RuntimeError:
-            logger.warning("Failed to build istio-ingress. Trying again!")
-            count += 1
+async def istio_ingress_charm(ops_test: OpsTest) -> Path:
+    """Istio Ingress charm used for integration testing."""
+    if charm_file := os.environ.get("CHARM_PATH"):
+        return Path(charm_file)
 
-            if count == 3:
-                raise
-
-
-@pytest.fixture(scope="module", autouse=True)
-def copy_traefik_library_into_tester_charms(ops_test: OpsTest):
-    """Ensure the tester charms have the requisite libraries."""
-    libraries = [
-        "traefik_k8s/v2/ingress.py",
-    ]
-    for tester in ["ipa"]:
-        for lib in libraries:
-            install_path = f"tests/integration/testers/{tester}/lib/charms/{lib}"
-            os.makedirs(os.path.dirname(install_path), exist_ok=True)
-            shutil.copyfile(f"lib/charms/{lib}", install_path)
-
+    charm = await ops_test.build_charm(".")
+    return charm
 
 @pytest.fixture(scope="module")
 @timed_memoizer
 async def ipa_tester_charm(ops_test: OpsTest):
     charm_path = (Path(__file__).parent / "testers" / "ipa").absolute()
+
+    # Update libraries in the tester charms
+    root_lib_folder = Path(__file__).parent.parent.parent / "lib"
+    tester_lib_folder = charm_path / "lib"
+
+    if os.path.exists(tester_lib_folder):
+        shutil.rmtree(tester_lib_folder)
+    shutil.copytree(root_lib_folder, tester_lib_folder)
+
     charm = await ops_test.build_charm(charm_path, verbosity="debug")
     return charm
-
 
 @dataclass
 class UnitRelationData:
