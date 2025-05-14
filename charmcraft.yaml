@@ -27,8 +27,7 @@ charm-libs:
     version: '3'
   - lib: "observability-libs.cert_handler"
     version: '1'
-
-      
+  
 containers:
   metrics-proxy:
     resource: metrics-proxy-image
