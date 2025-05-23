@@ -190,6 +190,7 @@ class IstioIngressCharm(CharmBase):
             relation_mapping=self.model.relations, app=self.app
         )
         self.framework.observe(self.on.config_changed, self._on_config_changed)
+        self.framework.observe(self.on.start, self._on_start)
         self.framework.observe(self.forward_auth.on.auth_config_changed, self._handle_auth_config)
         self.framework.observe(self.forward_auth.on.auth_config_removed, self._handle_auth_config)
         self.framework.observe(self.on.remove, self._on_remove)
@@ -317,6 +318,10 @@ class IstioIngressCharm(CharmBase):
 
     def _on_config_changed(self, _):
         """Event handler for config changed."""
+        self._sync_all_resources()
+
+    def _on_start(self, _):
+        """Event handler for start."""
         self._sync_all_resources()
 
     def _metrics_proxy_pebble_ready(self, _):
