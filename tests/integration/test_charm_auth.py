@@ -2,17 +2,18 @@
 # See LICENSE file for licensing details.
 
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
 
 import pytest
 import yaml
 from helpers import (
+    CharmDeploymentConfiguration,
     get_auth_policy_spec,
     get_configmap_data,
     get_k8s_service_address,
     get_listener_condition,
+    istio_k8s,
 )
 from pytest_operator.plugin import OpsTest
 
@@ -29,19 +30,6 @@ INGRESS_CONFIG_RELATION = "istio-ingress-config"
 FORWARD_AUTH_RELATION = "forward-auth"
 
 
-@dataclass
-class CharmDeploymentConfiguration:
-    entity_url: str  # Charm name or local path to charm
-    application_name: str
-    channel: str
-    trust: bool
-    config: Optional[dict] = None
-
-
-ISTIO_K8S = CharmDeploymentConfiguration(
-    entity_url="istio-k8s", application_name="istio-k8s", channel="latest/edge", trust=True
-)
-
 OAUTH2_K8S = CharmDeploymentConfiguration(
     entity_url="oauth2-proxy-k8s",
     application_name="oauth2-proxy-k8s",
@@ -56,9 +44,9 @@ async def test_deploy_dependencies(ops_test: OpsTest):
     await ops_test.track_model(CORE_ISTIO_MODEL)
     istio_core = ops_test.models.get(CORE_ISTIO_MODEL)
 
-    await istio_core.model.deploy(**asdict(ISTIO_K8S))
+    await istio_core.model.deploy(**asdict(istio_k8s))
     await istio_core.model.wait_for_idle(
-        [ISTIO_K8S.application_name], status="active", timeout=1000
+        [istio_k8s.application_name], status="active", timeout=1000
     )
 
     await ops_test.model.deploy(**asdict(OAUTH2_K8S))
@@ -82,7 +70,7 @@ async def test_relations_setup(ops_test: OpsTest):
     await istio_core.model.create_offer(
         endpoint=INGRESS_CONFIG_RELATION,
         offer_name=INGRESS_CONFIG_RELATION,
-        application_name=ISTIO_K8S.application_name,
+        application_name=istio_k8s.application_name,
     )
     # For some reason when using the direct consume() method, it raises a File not found error
     # await ops_test.model.consume(f"admin/{istio_core.model.name}.{INGRESS_CONFIG_RELATION}")
@@ -100,7 +88,7 @@ async def test_relations_setup(ops_test: OpsTest):
         apps=[APP_NAME, OAUTH2_K8S.application_name], status="active", timeout=1000
     )
     await istio_core.model.wait_for_idle(
-        [ISTIO_K8S.application_name], status="active", timeout=1000
+        [istio_k8s.application_name], status="active", timeout=1000
     )
 
 
@@ -128,7 +116,7 @@ async def test_oauth2_proxy_relation_break_and_recovery(ops_test: OpsTest):
         apps=[APP_NAME, OAUTH2_K8S.application_name], status="active", timeout=1000
     )
     await istio_core.model.wait_for_idle(
-        [ISTIO_K8S.application_name], status="active", timeout=1000
+        [istio_k8s.application_name], status="active", timeout=1000
     )
 
     # After breaking the relation, expect the policy to be removed and the extensionProviders cleared.
@@ -146,7 +134,7 @@ async def test_oauth2_proxy_relation_break_and_recovery(ops_test: OpsTest):
         apps=[APP_NAME, OAUTH2_K8S.application_name], status="active", timeout=1000
     )
     await istio_core.model.wait_for_idle(
-        [ISTIO_K8S.application_name], status="active", timeout=1000
+        [istio_k8s.application_name], status="active", timeout=1000
     )
 
     await assert_config_state(ops_test, istio_core, policy_name)
@@ -175,7 +163,7 @@ async def test_istio_ingress_config_relation_break_and_recovery(ops_test: OpsTes
         apps=[APP_NAME, OAUTH2_K8S.application_name], status="active", timeout=1000
     )
     await ops_test.models.get(CORE_ISTIO_MODEL).model.wait_for_idle(
-        [ISTIO_K8S.application_name], status="active", timeout=1000
+        [istio_k8s.application_name], status="active", timeout=1000
     )
 
     await assert_config_state(ops_test, istio_core, policy_name)
