@@ -1,5 +1,6 @@
 import logging
 import ssl
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, cast
 from urllib.parse import urlparse
 
@@ -317,3 +318,17 @@ class DNSResolverHTTPSAdapter(HTTPAdapter):
                 connection_pool_kwargs.pop("assert_hostname", None)
 
         return super().send(request, stream, timeout, verify, cert, proxies)
+
+
+@dataclass
+class CharmDeploymentConfiguration:
+    entity_url: str  # aka charm name or local path to charm
+    application_name: str
+    channel: str
+    trust: bool
+    config: Optional[dict] = None
+
+
+istio_k8s = CharmDeploymentConfiguration(
+    entity_url="istio-k8s", application_name="istio-k8s", channel="2/edge", trust=True
+)

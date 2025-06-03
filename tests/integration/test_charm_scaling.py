@@ -3,13 +3,12 @@
 
 import asyncio
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
-from typing import Optional
 
 import pytest
 import yaml
-from helpers import get_hpa
+from helpers import get_hpa, istio_k8s
 from pytest_operator.plugin import OpsTest
 
 logger = logging.getLogger(__name__)
@@ -21,28 +20,14 @@ resources = {
 }
 
 
-@dataclass
-class CharmDeploymentConfiguration:
-    entity_url: str  # aka charm name or local path to charm
-    application_name: str
-    channel: str
-    trust: bool
-    config: Optional[dict] = None
-
-
-ISTIO_K8S = CharmDeploymentConfiguration(
-    entity_url="istio-k8s", application_name="istio-k8s", channel="latest/edge", trust=True
-)
-
-
 @pytest.mark.abort_on_fail
 async def test_deploy_dependencies(ops_test: OpsTest):
     """Deploy istio as a dependency."""
     # Deploy Istio-k8s
-    await ops_test.model.deploy(**asdict(ISTIO_K8S))
+    await ops_test.model.deploy(**asdict(istio_k8s))
     await ops_test.model.wait_for_idle(
         [
-            ISTIO_K8S.application_name,
+            istio_k8s.application_name,
         ],
         status="active",
         timeout=1000,
