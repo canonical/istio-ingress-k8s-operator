@@ -5,6 +5,8 @@ name = "istio-ingress-k8s"
 version = "0.0"
 requires-python = "~=3.8"   
 dependencies = [
+    # TODO: pin pytest-charm-manifest to pypi once released
+    "pytest-charm-manifest@git+https://github.com/ca-scribner/pytest-charm-manifest.git@main",
     "ops~=2.5",
     "pydantic>=2",
     "lightkube-extensions@git+https://github.com/canonical/lightkube-extensions.git@main",
@@ -27,6 +29,7 @@ dev = [
     "ops-scenario",
     # Integration
     "pytest-asyncio",
+    "pytest-httpserver",
     "pytest-operator",
     "juju",
     "requests",

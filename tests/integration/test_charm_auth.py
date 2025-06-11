@@ -14,63 +14,50 @@ from helpers import (
     get_k8s_service_address,
     get_listener_condition,
 )
+from pytest_charm_manifest.plugin import CharmManifest, CharmManifestEntry
 from pytest_operator.plugin import OpsTest
 
 logger = logging.getLogger(__name__)
 
 METADATA = yaml.safe_load(Path("./charmcraft.yaml").read_text())
 APP_NAME = METADATA["name"]
-resources = {
-    "metrics-proxy-image": METADATA["resources"]["metrics-proxy-image"]["upstream-source"],
-}
 
 CORE_ISTIO_MODEL = "istio-core"
 INGRESS_CONFIG_RELATION = "istio-ingress-config"
 FORWARD_AUTH_RELATION = "forward-auth"
 
-
-@dataclass
-class CharmDeploymentConfiguration:
-    entity_url: str  # Charm name or local path to charm
-    application_name: str
-    channel: str
-    trust: bool
-    config: Optional[dict] = None
-
-
-ISTIO_K8S = CharmDeploymentConfiguration(
-    entity_url="istio-k8s", application_name="istio-k8s", channel="latest/edge", trust=True
-)
-
-OAUTH2_K8S = CharmDeploymentConfiguration(
-    entity_url="oauth2-proxy-k8s",
-    application_name="oauth2-proxy-k8s",
-    channel="latest/edge",
-    trust=True,
-)
+ISTIO_K8S_APP_NAME = "istio-k8s"
+OAUTH2_K8S_APP_NAME = "oauth2-proxy-k8s"
 
 
 @pytest.mark.abort_on_fail
-async def test_deploy_dependencies(ops_test: OpsTest):
+async def test_deploy_dependencies(ops_test: OpsTest, charm_manifest: CharmManifest):
     # Deploy Istio-k8s in a separate model and oauth2 istio-ingress-k8s in the primary model.
     await ops_test.track_model(CORE_ISTIO_MODEL)
     istio_core = ops_test.models.get(CORE_ISTIO_MODEL)
 
-    await istio_core.model.deploy(**asdict(ISTIO_K8S))
+    await istio_core.model.deploy(
+        application_name=ISTIO_K8S_APP_NAME,
+        **asdict(charm_manifest.get_charm_config("istio-k8s")),
+    )
     await istio_core.model.wait_for_idle(
-        [ISTIO_K8S.application_name], status="active", timeout=1000
+        [ISTIO_K8S_APP_NAME], status="active", timeout=1000
     )
 
-    await ops_test.model.deploy(**asdict(OAUTH2_K8S))
+    await ops_test.model.deploy(
+        application_name=OAUTH2_K8S_APP_NAME,
+        **asdict(charm_manifest.get_charm_config("oauth2-proxy-k8s")),
+    )
     await ops_test.model.wait_for_idle(
-        [OAUTH2_K8S.application_name], status="active", timeout=1000
+        [OAUTH2_K8S_APP_NAME], status="active", timeout=1000
     )
 
 
 @pytest.mark.abort_on_fail
-async def test_deployment(ops_test: OpsTest, istio_ingress_charm):
+async def test_deployment(ops_test: OpsTest, istio_ingress_charm: CharmManifestEntry):
     await ops_test.model.deploy(
-        istio_ingress_charm, resources=resources, application_name=APP_NAME, trust=True
+        application_name=APP_NAME,
+        **asdict(istio_ingress_charm),
     )
     await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=1000)
 

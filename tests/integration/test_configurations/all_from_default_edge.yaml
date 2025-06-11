@@ -1,0 +1,9 @@
+istio-k8s:
+  channel: edge
+  trust: true
+oauth2-proxy-k8s:
+  channel: edge
+  trust: true
+
+
+

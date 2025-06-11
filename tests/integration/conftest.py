@@ -15,12 +15,18 @@ from typing import Dict
 
 import pytest
 import yaml
+from pytest_charm_manifest.plugin import CharmManifest, CharmManifestEntry
 from pytest_operator.plugin import OpsTest
 
 logger = logging.getLogger(__name__)
 
 _JUJU_DATA_CACHE = {}
 _JUJU_KEYS = ("egress-subnets", "ingress-address", "private-address")
+
+METADATA = yaml.safe_load(Path("./charmcraft.yaml").read_text())
+ISTIO_INGRESS_RESOURCES = {
+    "metrics-proxy-image": METADATA["resources"]["metrics-proxy-image"]["upstream-source"],
+}
 
 
 class Store(defaultdict):
@@ -62,17 +68,39 @@ def timed_memoizer(func):
 
 @pytest.fixture(scope="module")
 @timed_memoizer
-async def istio_ingress_charm(ops_test: OpsTest) -> Path:
+async def istio_ingress_charm(ops_test: OpsTest, charm_manifest: CharmManifest) -> Path:
     """Istio Ingress charm used for integration testing."""
+    # If the CHARM_PATH environment variable is set, use the charm from the path.
+    # TODO: This could be removed if we use the manifest lookup to provide built charms in CI.
     if charm_file := os.environ.get("CHARM_PATH"):
-        return Path(charm_file)
+        return CharmManifestEntry(
+            channel="edge",  # Ignored for entity_url=filepath
+            entity_url=Path(charm_file),
+            trust=True,
+            resources=ISTIO_INGRESS_RESOURCES,
+        )
 
-    charm = await ops_test.build_charm(".")
-    return charm
+    # TODO: This was a rough pass to make it work.  I'll need to think on it again to make 
+    #  sure I didn't miss anything
+    # Otherwise, use what the manifest specifies if set
+    try:
+        return charm_manifest.get_charm_config("istio-ingress-k8s")
+    except KeyError:
+        # and if the manifest doesn't specify a charm, build the current directory.
+        charm = await ops_test.build_charm(".")
+
+        return CharmManifestEntry(
+            channel="edge",  # Ignored for entity_url=filepath
+            entity_url=charm,
+            trust=True,
+            resources=ISTIO_INGRESS_RESOURCES,
+        )
+
 
 @pytest.fixture(scope="module")
 @timed_memoizer
 async def ipa_tester_charm(ops_test: OpsTest):
+    # TODO: Do the same as istio_ingress_charm fixture so it uses the manifest lookup
     charm_path = (Path(__file__).parent / "testers" / "ipa").absolute()
 
     # Update libraries in the tester charms
