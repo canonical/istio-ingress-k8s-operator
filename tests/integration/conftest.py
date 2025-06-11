@@ -15,7 +15,7 @@ from typing import Dict
 
 import pytest
 import yaml
-from charmed_service_mesh_helpers.testing.charm_dependency_management import CharmManifest, CharmManifestEntry, charm_manifest  # pytest fixture
+from pytest_charm_manifest.plugin import CharmManifest, CharmManifestEntry
 from pytest_operator.plugin import OpsTest
 
 logger = logging.getLogger(__name__)
@@ -80,6 +80,8 @@ async def istio_ingress_charm(ops_test: OpsTest, charm_manifest: CharmManifest) 
             resources=ISTIO_INGRESS_RESOURCES,
         )
 
+    # TODO: This was a rough pass to make it work.  I'll need to think on it again to make 
+    #  sure I didn't miss anything
     # Otherwise, use what the manifest specifies if set
     try:
         return charm_manifest.get_charm_config("istio-ingress-k8s")
@@ -261,16 +263,3 @@ def get_relation_data(
         requirer_endpoint, provider_endpoint, include_default_juju_keys, model
     )
     return RelationData(provider=provider_data, requirer=requirer_data)
-
-
-def pytest_addoption(parser):
-    """Add the dependency-manifest option to pytest.
-
-    To pass a manifesst when calling pytest, use:
-        `pytest --dependency-manifest path/to/manifest.yaml --dependency-manifest http://url.to/manifest.yaml`
-    """
-    parser.addoption(
-        "--dependency-manifest",
-        action="append",  # Changed to append to support multiple files
-        help="Path to a YAML manifest file or URL specifying charm dependencies. Can be specified multiple times.",
-    )

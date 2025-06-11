@@ -14,7 +14,7 @@ from helpers import (
     get_k8s_service_address,
     get_listener_condition,
 )
-from charmed_service_mesh_helpers.testing.charm_dependency_management import CharmManifest, CharmManifestEntry
+from pytest_charm_manifest.plugin import CharmManifest, CharmManifestEntry
 from pytest_operator.plugin import OpsTest
 
 logger = logging.getLogger(__name__)
@@ -28,26 +28,6 @@ FORWARD_AUTH_RELATION = "forward-auth"
 
 ISTIO_K8S_APP_NAME = "istio-k8s"
 OAUTH2_K8S_APP_NAME = "oauth2-proxy-k8s"
-
-# @dataclass
-# class CharmDeploymentConfiguration:
-#     entity_url: str  # Charm name or local path to charm
-#     application_name: str
-#     channel: str
-#     trust: bool
-#     config: Optional[dict] = None
-
-
-# ISTIO_K8S = CharmDeploymentConfiguration(
-#     entity_url="istio-k8s", application_name="istio-k8s", channel="latest/edge", trust=True
-# )
-
-# OAUTH2_K8S = CharmDeploymentConfiguration(
-#     entity_url="oauth2-proxy-k8s",
-#     application_name="oauth2-proxy-k8s",
-#     channel="latest/edge",
-#     trust=True,
-# )
 
 
 @pytest.mark.abort_on_fail
