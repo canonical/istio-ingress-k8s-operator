@@ -1,0 +1,9 @@
+istio-beacon-k8s:
+  channel: edge
+  trust: true
+istio-ingress-k8s:
+  channel: edge
+  trust: true
+istio-k8s:
+  channel: edge
+  trust: true

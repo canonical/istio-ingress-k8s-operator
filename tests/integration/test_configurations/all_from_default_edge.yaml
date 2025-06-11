@@ -1,0 +1,15 @@
+istio-k8s:
+  channel: edge
+  trust: true
+oauth2-proxy-k8s:
+  channel: edge
+  trust: true
+some-charm:
+  ____: /some/path
+
+
+my-charm:
+  entity_url: /some/path.charm
+
+
+

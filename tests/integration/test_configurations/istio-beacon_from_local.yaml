@@ -1,0 +1,6 @@
+istio-ingress-k8s:
+  entity_url: istio-ingress-k8s_ubuntu@24.04-amd64.charm
+  channel: edge
+  trust: true
+  resources: 
+    metrics-proxy-image: docker.io/ibraaoad/metrics-proxy:v0.1.0
