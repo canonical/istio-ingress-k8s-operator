@@ -1,5 +1,6 @@
 import logging
 import ssl
+from dataclasses import dataclass
 from typing import Any, Dict, Optional, cast
 from urllib.parse import urlparse
 
@@ -12,6 +13,27 @@ from pytest_operator.plugin import OpsTest
 from requests.adapters import DEFAULT_POOLBLOCK, DEFAULT_POOLSIZE, DEFAULT_RETRIES, HTTPAdapter
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass
+class CharmDeploymentConfiguration:
+    entity_url: str  # aka charm name or local path to charm
+    application_name: str
+    channel: str
+    trust: bool
+    config: Optional[dict] = None
+
+
+istio_k8s = CharmDeploymentConfiguration(
+    entity_url="istio-k8s", application_name="istio-k8s", channel="2/edge", trust=True
+)
+
+oauth_k8s = CharmDeploymentConfiguration(
+    entity_url="oauth2-proxy-k8s",
+    application_name="oauth2-proxy-k8s",
+    channel="latest/edge",
+    trust=True,
+)
 
 
 RESOURCE_TYPES = {
