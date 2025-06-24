@@ -2,7 +2,7 @@
 # See LICENSE file for licensing details.
 
 import logging
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from pathlib import Path
 from typing import Optional
 
@@ -19,6 +19,7 @@ from helpers import (
     get_listener_condition,
     get_listener_spec,
     get_route_condition,
+    istio_k8s,
     send_http_request,
     send_http_request_with_custom_ca,
 )
@@ -35,21 +36,6 @@ resources = {
     "metrics-proxy-image": METADATA["resources"]["metrics-proxy-image"]["upstream-source"],
 }
 
-
-@dataclass
-class CharmDeploymentConfiguration:
-    entity_url: str  # aka charm name or local path to charm
-    application_name: str
-    channel: str
-    trust: bool
-    config: Optional[dict] = None
-
-
-ISTIO_K8S = CharmDeploymentConfiguration(
-    entity_url="istio-k8s", application_name="istio-k8s", channel="latest/edge", trust=True
-)
-
-
 @pytest.mark.abort_on_fail
 async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
     """Deploys dependencies across two models: one for Istio and one for ipa-tester.
@@ -64,10 +50,10 @@ async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
     istio_core = ops_test.models.get("istio-core")
 
     # Deploy Istio-k8s
-    await istio_core.model.deploy(**asdict(ISTIO_K8S))
+    await istio_core.model.deploy(**asdict(istio_k8s))
     await istio_core.model.wait_for_idle(
         [
-            ISTIO_K8S.application_name,
+            istio_k8s.application_name,
         ],
         status="active",
         timeout=1000,
