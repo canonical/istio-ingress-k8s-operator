@@ -5,6 +5,7 @@
 
 """Istio Ingress Charm."""
 import hashlib
+import ipaddress
 import logging
 import re
 import time
@@ -1124,14 +1125,22 @@ class IstioIngressCharm(CharmBase):
         #     r"^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
         # )
 
+        # Validate the hostname length
+        if not hostname or not (1 <= len(hostname) <= 253):
+            return False
+
+        try:
+            ipaddress.ip_address(hostname)
+            # This is an IP address, so it's not a valid hostname
+            return False
+        except ValueError:
+            # This is not an IP address, so it might be a valid hostname
+            pass
+
         # Regex with no wildcard (*) or IP support.
         hostname_regex = re.compile(
             r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
         )
-
-        # Validate the hostname length
-        if not hostname or not (1 <= len(hostname) <= 253):
-            return False
 
         # Check if the hostname matches the required pattern
         if not hostname_regex.match(hostname):
