@@ -1131,7 +1131,7 @@ class IstioIngressCharm(CharmBase):
 
         try:
             ipaddress.ip_address(hostname)
-            # This is an IP address, so it's not a valid hostname
+            # This is an IP address, so it is not a valid hostname
             return False
         except ValueError:
             # This is not an IP address, so it might be a valid hostname
