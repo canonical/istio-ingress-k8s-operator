@@ -31,6 +31,7 @@ test_inputs = [
     ("example.com.", False),  # Ends with a dot
     ("exa$mple.com", False),  # Contains invalid characters
     ("example.com..", False),  # Ends with a double dot
+    # IP Addresses (Should Not Match)
     ("192.168.1.192", False),
     ("10.0.0.1", False),
     ("255.255.255.255", False),
