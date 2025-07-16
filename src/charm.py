@@ -5,6 +5,7 @@
 
 """Istio Ingress Charm."""
 import hashlib
+import ipaddress
 import logging
 import re
 import time
@@ -1121,17 +1122,25 @@ class IstioIngressCharm(CharmBase):
         # Below is the original regex used to validate hosts, as part of this dev iteration below will be omitted in favor of a regex with no wildcard support.
         # TODO: uncomment the below when support is added for both wildcards and using subdomains
         # hostname_regex = re.compile(
-        #     r"^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$"
+        #     r"^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
         # )
-
-        # Regex with no wildcard (*) or IP support.
-        hostname_regex = re.compile(
-            r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z]([-a-z0-9]*[a-z0-9])?)*$"
-        )
 
         # Validate the hostname length
         if not hostname or not (1 <= len(hostname) <= 253):
             return False
+
+        try:
+            ipaddress.ip_address(hostname)
+            # This is an IP address, so it is not a valid hostname
+            return False
+        except ValueError:
+            # This is not an IP address, so it might be a valid hostname
+            pass
+
+        # Regex with no wildcard (*) or IP support.
+        hostname_regex = re.compile(
+            r"^[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+        )
 
         # Check if the hostname matches the required pattern
         if not hostname_regex.match(hostname):
