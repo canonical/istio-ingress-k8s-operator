@@ -1118,13 +1118,6 @@ class IstioIngressCharm(CharmBase):
         Returns:
             bool: True if the hostname is valid, False otherwise.
         """
-        # Regex to match gateway hostname specs https://github.com/kubernetes-sigs/gateway-api/blob/6446fac9325dbb570675f7b85d58727096bf60a6/apis/v1/shared_types.go#L523
-        # Below is the original regex used to validate hosts, as part of this dev iteration below will be omitted in favor of a regex with no wildcard support.
-        # TODO: uncomment the below when support is added for both wildcards and using subdomains
-        # hostname_regex = re.compile(
-        #     r"^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
-        # )
-
         # Validate the hostname length
         if not hostname or not (1 <= len(hostname) <= 253):
             return False
@@ -1136,6 +1129,13 @@ class IstioIngressCharm(CharmBase):
         except ValueError:
             # This is not an IP address, so it might be a valid hostname
             pass
+
+        # Regex to match gateway hostname specs https://github.com/kubernetes-sigs/gateway-api/blob/6446fac9325dbb570675f7b85d58727096bf60a6/apis/v1/shared_types.go#L523
+        # Below is the original regex used to validate hosts, as part of this dev iteration below will be omitted in favor of a regex with no wildcard support.
+        # TODO: uncomment the below when support is added for both wildcards and using subdomains
+        # hostname_regex = re.compile(
+        #     r"^(\*\.)?[a-z0-9]([-a-z0-9]*[a-z0-9])?(\.[a-z0-9]([-a-z0-9]*[a-z0-9])?)*$"
+        # )
 
         # Regex with no wildcard (*) or IP support.
         hostname_regex = re.compile(
