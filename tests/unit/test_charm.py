@@ -20,6 +20,7 @@ test_inputs = [
     ("a--b.example.com", True),  # Double hyphen inside label
     ("1234567890.com", True),  # All numeric but with a valid TLD
     ("xn--80ak6aa92e.com", True),  # Punycode for internationalized domain
+    ("1.2.3.example.com", True),  # Mix of numeric and alphabetical labels
     # Invalid Hostnames
     ("-example.com", False),  # Starts with a hyphen
     ("*-valid.example.org", False),
@@ -37,7 +38,6 @@ test_inputs = [
     # Edge Cases (Should Not Match)
     ("a.*.com", False),  # Wildcard in the middle, which is not valid
     ("a.b-", False),  # Label ends with a hyphen
-    ("1.2.3.example.com", False),  # Mix of numeric and alphabetical labels
 ]
 
 
