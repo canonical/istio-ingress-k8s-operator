@@ -194,7 +194,8 @@ async def test_route_validity(
 
     for ipa_tester in [IPA_TESTER, IPA_TESTER_UNAUTHENTICATED]:
         tester_url = f"http://{istio_ingress_address}/{model}-{ipa_tester}"
-        route_condition = await get_route_condition(ops_test, f"{ipa_tester}-http-{APP_NAME}")
+        # the route name will follow the format {ingressed_app_name}-{httproute or grpcroute}-{listener_name}-{ingress_app_name}
+        route_condition = await get_route_condition(ops_test, f"{ipa_tester}-httproute-http-80-{APP_NAME}")
 
         assert route_condition["conditions"][0]["message"] == "Route was valid"
         assert route_condition["conditions"][0]["reason"] == "Accepted"

@@ -4,15 +4,14 @@
 # See LICENSE file for licensing details.
 
 """Istio Ingress Charm."""
-import hashlib
 import ipaddress
 import logging
 import re
 import time
-from collections import defaultdict
-from typing import Dict, List, Optional, TypedDict, cast
+from typing import Dict, List, Optional, cast
 from urllib.parse import urlparse
 
+from charms.istio_ingress_k8s.v0.istio_ingress_route import IstioIngressRouteProvider
 from charms.istio_k8s.v0.istio_ingress_config import IngressConfigProvider
 from charms.oauth2_proxy_k8s.v0.forward_auth import ForwardAuthRequirer, ForwardAuthRequirerConfig
 from charms.observability_libs.v1.cert_handler import CertHandler
@@ -33,7 +32,7 @@ from lightkube.resources.autoscaling_v2 import HorizontalPodAutoscaler
 from lightkube.resources.core_v1 import Secret, Service
 from lightkube.types import PatchType
 from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
-from ops import BlockedStatus, EventBase, main
+from ops import BlockedStatus, main
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, MaintenanceStatus
 from ops.pebble import ChangeError, Layer
@@ -47,27 +46,55 @@ from models import (
     BackendRef,
     From,
     GatewayTLSConfig,
-    HTTPRequestRedirectFilter,
+    GRPCRouteResource,
+    GRPCRouteResourceSpec,
+    GRPCRouteRule,
+    HTTPPathMatch,
     HTTPRouteFilter,
     HTTPRouteFilterType,
+    HTTPRouteMatch,
     HTTPRouteResource,
     HTTPRouteResourceSpec,
+    HTTPRouteRule,
     HTTPURLRewriteFilter,
     IstioGatewayResource,
     IstioGatewaySpec,
     Listener,
-    Match,
     Metadata,
     Operation,
     ParentRef,
-    PathMatch,
     PolicyTargetReference,
     Provider,
-    Rule,
     SecretObjectReference,
     Source,
     To,
     WorkloadSelector,
+)
+from utils import (
+    INGRESS_AUTHENTICATED_NAME,
+    INGRESS_UNAUTHENTICATED_NAME,
+    ISTIO_INGRESS_ROUTE_AUTHENTICATED_NAME,
+    ISTIO_INGRESS_ROUTE_UNAUTHENTICATED_NAME,
+    DisabledCertHandler,
+    GatewayListener,
+    GRPCRoute,
+    HTTPRoute,
+    RefreshCerts,
+    RouteInfo,
+    clear_conflicting_routes,
+    deduplicate_grpc_routes,
+    deduplicate_http_routes,
+    deduplicate_listeners,
+    generate_telemetry_labels,
+    get_peer_identity_for_juju_application,
+    get_relation_by_name_and_app,
+    get_unauthenticated_paths,
+    get_unauthenticated_paths_from_istio_ingress_route_configs,
+    normalize_ipa_listeners,
+    normalize_ipa_routes,
+    normalize_istio_ingress_route_grpc_routes,
+    normalize_istio_ingress_route_http_routes,
+    normalize_istio_ingress_route_listeners,
 )
 
 logger = logging.getLogger(__name__)
@@ -100,8 +127,7 @@ INGRESS_RESOURCE_TYPES = {
     RESOURCE_TYPES["ReferenceGrant"],
     RESOURCE_TYPES["HTTPRoute"],
 }
-INGRESS_AUTHENTICATED_NAME = "ingress"
-INGRESS_UNAUTHENTICATED_NAME = "ingress-unauthenticated"
+
 AUTHORIZATION_POLICY_RESOURCE_TYPES = {RESOURCE_TYPES["AuthorizationPolicy"]}
 
 GATEWAY_SCOPE = "istio-gateway"
@@ -112,32 +138,6 @@ EXTZ_AUTH_POLICY_SCOPE = "external-authorizer-authorization-policy"
 INGRESS_CONFIG_RELATION = "istio-ingress-config"
 FORWARD_AUTH_RELATION = "forward-auth"
 PEERS_RELATION = "peers"
-
-
-class DataValidationError(RuntimeError):
-    """Raised when data validation fails on IPU relation data."""
-
-
-class DisabledCertHandler:
-    """A mock CertHandler class that mimics being unavailable."""
-
-    available: bool = False
-    server_cert = None
-    private_key = None
-
-
-class RefreshCerts(EventBase):
-    """Event raised when the charm wants the certs to be refreshed."""
-
-
-class RouteInfo(TypedDict):
-    """Class to hold route information."""
-
-    service_name: str
-    namespace: str
-    port: int
-    strip_prefix: bool
-    prefix: Optional[str]
 
 
 @trace_charm(
@@ -173,6 +173,22 @@ class IstioIngressCharm(CharmBase):
                 relation_name=INGRESS_UNAUTHENTICATED_NAME,
             ),
         }
+
+        # Map of istio-ingress-route relation names to handlers
+        self.istio_ingress_route_handlers = {
+            ISTIO_INGRESS_ROUTE_AUTHENTICATED_NAME: IstioIngressRouteProvider(
+                charm=self,
+                relation_name=ISTIO_INGRESS_ROUTE_AUTHENTICATED_NAME,
+                external_host="",
+                tls_enabled=False,
+            ),
+            ISTIO_INGRESS_ROUTE_UNAUTHENTICATED_NAME: IstioIngressRouteProvider(
+                charm=self,
+                relation_name=ISTIO_INGRESS_ROUTE_UNAUTHENTICATED_NAME,
+                external_host="",
+                tls_enabled=False,
+            ),
+        }
         self.telemetry_labels = generate_telemetry_labels(self.app.name, self.model.name)
         # Configure Observability
         self._scraping = MetricsEndpointProvider(
@@ -199,6 +215,13 @@ class IstioIngressCharm(CharmBase):
                 relation_handler.on.data_provided, self._on_ingress_data_provided
             )
             self.framework.observe(relation_handler.on.data_removed, self._on_ingress_data_removed)
+        for relation_handler in self.istio_ingress_route_handlers.values():
+            self.framework.observe(
+                relation_handler.on.ready, self._on_istio_ingress_route_ready
+            )
+            self.framework.observe(
+                relation_handler.on.data_removed, self._on_istio_ingress_route_data_removed
+            )
         self.framework.observe(
             self.on.metrics_proxy_pebble_ready, self._metrics_proxy_pebble_ready
         )
@@ -378,6 +401,14 @@ class IstioIngressCharm(CharmBase):
         """Handle a unit removing the data needed to provide ingress."""
         self._sync_all_resources()
 
+    def _on_istio_ingress_route_ready(self, _):
+        """Handle a unit providing istio-ingress-route config data."""
+        self._sync_all_resources()
+
+    def _on_istio_ingress_route_data_removed(self, _):
+        """Handle a unit removing istio-ingress-route relation."""
+        self._sync_all_resources()
+
     def _remove_gateway_resources(self):
         kgm = self._get_gateway_resource_manager()
         kgm.delete()
@@ -468,40 +499,45 @@ class IstioIngressCharm(CharmBase):
             },
         )
 
-    def _construct_gateway(self, tls_secret_name: Optional[str] = None):
-        """Construct the Gateway resource for the ingress.
+    def _construct_gateway(self, normalized_listeners: List[GatewayListener]):
+        """Construct the Gateway resource from normalized listeners.
 
-        Gateway will always enable HTTP on port 80 and, if TLS is configured, HTTPS on port 443.
+        This method constructs a Gateway from a list of normalized listeners that have already
+        been merged and deduplicated. Each normalized listener contains:
+        - port: The port number
+        - gateway_protocol: "HTTP" or "HTTPS"
+        - tls_secret_name: Optional TLS secret for HTTPS listeners
+        - source_app: Source application (for debugging/logging)
 
         Args:
-            tls_secret_name (str): (Optional) The name of the secret containing the TLS certificates.  If specified, the
-                                   gateway will be configured to use TLS with this secret for the certificates.
+            normalized_listeners: List of normalized Gateway listeners
+
+        Returns:
+            Gateway lightkube resource
         """
         allowed_routes = AllowedRoutes(namespaces={"from": "All"})
         hostname = self._ingress_url if self._is_valid_hostname(self._ingress_url) else None
-        listeners = [
-            Listener(
-                name="http",
-                port=80,
-                protocol="HTTP",
+
+        listeners = []
+        for norm_listener in normalized_listeners:
+            # Derive listener name from Gateway protocol and port
+            listener_name = f"{norm_listener['gateway_protocol'].lower()}-{norm_listener['port']}"
+
+            listener = Listener(
+                name=listener_name,
+                port=norm_listener["port"],
+                protocol=norm_listener["gateway_protocol"],
                 allowedRoutes=allowed_routes,
                 hostname=hostname,
             )
-        ]
 
-        if tls_secret_name:
-            listeners.append(
-                Listener(
-                    name="https",
-                    port=443,
-                    protocol="HTTPS",
-                    allowedRoutes=allowed_routes,
-                    tls=GatewayTLSConfig(
-                        certificateRefs=[SecretObjectReference(name=tls_secret_name)]
-                    ),
-                    hostname=hostname,
+            # Add TLS config if this is an HTTPS listener
+            if norm_listener["gateway_protocol"] == "HTTPS" and norm_listener["tls_secret_name"]:
+                listener.tls = GatewayTLSConfig(
+                    certificateRefs=[SecretObjectReference(name=norm_listener["tls_secret_name"])]
                 )
-            )
+
+            listeners.append(listener)
 
         gateway = IstioGatewayResource(
             metadata=Metadata(
@@ -543,8 +579,8 @@ class IstioIngressCharm(CharmBase):
                     )
                 ],
                 rules=[
-                    Rule(
-                        matches=[Match(path=PathMatch(value=prefix))],
+                    HTTPRouteRule(
+                        matches=[HTTPRouteMatch(path=HTTPPathMatch(value=prefix))],
                         backendRefs=[
                             BackendRef(
                                 name=service_name,
@@ -593,7 +629,7 @@ class IstioIngressCharm(CharmBase):
                             From(
                                 source=Source(
                                     principals=[
-                                        _get_peer_identity_for_juju_application(
+                                        get_peer_identity_for_juju_application(
                                             self.managed_name, self.model.name
                                         )
                                     ]
@@ -655,46 +691,6 @@ class IstioIngressCharm(CharmBase):
             ),
         )
 
-    def _construct_redirect_to_https_httproute(
-        self, app_name: str, model: str, prefix: str, section_name: str
-    ):
-        http_route = HTTPRouteResource(
-            metadata=Metadata(
-                name=app_name + "-" + section_name + "-" + self.app.name,
-                namespace=model,
-            ),
-            spec=HTTPRouteResourceSpec(
-                parentRefs=[
-                    ParentRef(
-                        name=self.app.name,
-                        namespace=self.model.name,
-                        sectionName=section_name,
-                    )
-                ],
-                rules=[
-                    Rule(
-                        matches=[Match(path=PathMatch(value=prefix))],
-                        filters=[
-                            HTTPRouteFilter(
-                                type=HTTPRouteFilterType.RequestRedirect,
-                                requestRedirect=HTTPRequestRedirectFilter(
-                                    scheme="https", statusCode=301
-                                ),
-                            )
-                        ],
-                    )
-                ],
-                # TODO: uncomment the below when support is added for both wildcards and using subdomains
-                # hostnames=[udata.host for udata in data.units],
-            ),
-        )
-        http_resource = RESOURCE_TYPES["HTTPRoute"]
-        return http_resource(
-            metadata=ObjectMeta.from_dict(http_route.metadata.model_dump()),
-            # Export without unset and None because None means nil in Kubernetes, which is not what we want.
-            spec=http_route.spec.model_dump(exclude_none=True),
-        )
-
     def _construct_hpa(self, unit_count: int) -> HorizontalPodAutoscaler:
         return HorizontalPodAutoscaler(
             metadata=ObjectMeta(name=self.app.name, namespace=self.model.name),
@@ -746,12 +742,50 @@ class IstioIngressCharm(CharmBase):
             self._remove_gateway_resources()
             return
 
-        # Construct route information from the ingress relation
+        # Fetch raw route data from both IPA and istio-ingress-route
         application_route_data = self._get_routes()
-        deduplicate_app_route_data(application_route_data)
+        istio_ingress_route_configs = self._get_istio_ingress_route_configs()
+
+        # Normalize data to common intermediate formats
+        tls_secret = self._construct_gateway_tls_secret()
+        is_tls_enabled = tls_secret is not None
+        tls_secret_name = self._certificate_secret_name if is_tls_enabled else None
+
+        # Normalize listeners from both sources
+        ipa_listeners = normalize_ipa_listeners(tls_secret_name)
+        istio_listeners = normalize_istio_ingress_route_listeners(
+            istio_ingress_route_configs, tls_secret_name
+        )
+
+        # Normalize routes from both sources
+        ipa_http_routes = normalize_ipa_routes(application_route_data, is_tls_enabled, self.app.name)
+        istio_http_routes = normalize_istio_ingress_route_http_routes(
+            istio_ingress_route_configs, is_tls_enabled, self.app.name
+        )
+        istio_grpc_routes = normalize_istio_ingress_route_grpc_routes(
+            istio_ingress_route_configs, is_tls_enabled, self.app.name
+        )
+
+        # Merge and deduplicate using source-agnostic functions
+        unique_listeners = deduplicate_listeners(ipa_listeners + istio_listeners)
+        valid_http_routes, http_apps_to_clear = deduplicate_http_routes(ipa_http_routes + istio_http_routes)
+        valid_grpc_routes, grpc_apps_to_clear = deduplicate_grpc_routes(istio_grpc_routes)  # ipa relation doesnt support grpc routes.
+
+        # Clear conflicts from original structures (needed for publishing back to apps)
         # TODO: Capture a BlockedStatus here if there's duplicates
         #  (https://github.com/canonical/istio-ingress-k8s-operator/issues/57)
+        all_apps_to_clear = http_apps_to_clear | grpc_apps_to_clear
+        clear_conflicting_routes(
+            application_route_data, istio_ingress_route_configs, all_apps_to_clear
+        )
+
+        # Extract unauthenticated paths (still uses original cleared structures)
         unauthenticated_paths = get_unauthenticated_paths(application_route_data)
+        unauthenticated_paths.extend(
+            get_unauthenticated_paths_from_istio_ingress_route_configs(
+                istio_ingress_route_configs
+            )
+        )
 
         # Synchronize external authorization configuration.
         if not self.ingress_config.is_ready() and auth_decisions_address:
@@ -764,7 +798,7 @@ class IstioIngressCharm(CharmBase):
 
         # Reconcile HPA and gateway resources
 
-        self._sync_gateway_resources()
+        self._sync_gateway_resources(unique_listeners)
         self.unit.status = MaintenanceStatus("Validating gateway readiness")
         if not self._is_ready():
             return
@@ -778,20 +812,19 @@ class IstioIngressCharm(CharmBase):
 
         # Synchronize ingress resources
         try:
-            # Extract just a list of the routes to be created
-            routes_to_create = [
-                route
-                for route_data in application_route_data.values()
-                for route in route_data["routes"]
-            ]
-            self._sync_ingress_resources(routes=routes_to_create)
+            self._sync_ingress_resources(
+                http_routes=valid_http_routes, grpc_routes=valid_grpc_routes
+            )
         except ApiError as e:
             logger.error("Ingress sync failed: %s", e)
             self.unit.status = BlockedStatus("Issue with setting up an ingress")
             return
 
-        # Publish route information to ingressed applications
+        # Publish route information to ingressed applications (IPA)
         self._publish_routes_to_ingressed_applications(application_route_data)
+
+        # Publish istio-ingress-route data (external_host + tls_enabled) to apps without conflicts
+        self._publish_istio_ingress_route_data(istio_ingress_route_configs, all_apps_to_clear)
 
         # Set up the proxy service.
         self._setup_proxy_pebble_service()
@@ -844,6 +877,21 @@ class IstioIngressCharm(CharmBase):
                 routes[route_key] = app_route_data
 
         return routes
+
+    def _get_istio_ingress_route_configs(self):
+        """Return the istio-ingress-route configs from all related applications.
+
+        Returns:
+            A dict mapping (app_name, relation_name): {"handler": relation_handler, "config": IstioIngressRouteConfig | None}
+        """
+        configs = {}
+        for relation_name, handler in self.istio_ingress_route_handlers.items():
+            for rel in self.model.relations.get(relation_name, []):
+                app_name = rel.app.name
+                route_key = (app_name, relation_name)
+                config = handler.get_config(rel) if rel.active else None
+                configs[route_key] = {"handler": handler, "config": config}
+        return configs
 
     def _get_routes_from_ingress(self, relation_name: str):
         """Retrieve all routes from the given relation, and associated relation_handlers.
@@ -905,6 +953,38 @@ class IstioIngressCharm(CharmBase):
 
             relation_handler.publish_url(rel, ingress_url + routes[0]["prefix"])
 
+    def _publish_istio_ingress_route_data(
+        self, istio_ingress_route_configs: Dict, apps_to_clear: set
+    ):
+        """Update istio-ingress-route relations with external host and TLS status.
+
+        For apps with route conflicts, clears the relation data (using wipe_ingress_data).
+        For apps without conflicts, publishes the external_host and tls_enabled status.
+
+        Args:
+            istio_ingress_route_configs: Dict mapping (app_name, relation_name) to config data
+            apps_to_clear: Set of (app_name, relation_name) tuples that have conflicts
+        """
+        is_tls_enabled = self._construct_gateway_tls_secret() is not None
+
+        for (app_name, relation_name), config_data in istio_ingress_route_configs.items():
+            relation_handler = config_data["handler"]
+            app_key = (app_name, relation_name)
+            rel = get_relation_by_name_and_app(self.model.relations[relation_name], app_name)
+
+            if app_key in apps_to_clear:
+                # Clear relation data for apps with conflicts (similar to IPA wipe_ingress_data)
+                relation_handler.wipe_ingress_data(rel)
+                logger.debug(
+                    f"Cleared istio-ingress-route data for {app_name} on {relation_name} due to route conflict"
+                )
+            else:
+                # Publish ingress address for apps without conflicts
+                relation_handler.update_ingress_address(
+                    external_host=self._ingress_url,
+                    tls_enabled=is_tls_enabled,
+                )
+
     def _publish_to_istio_ingress_config_relation(self, decisions_address: Optional[str]):
         if not decisions_address:
             self.ingress_config.clear()
@@ -930,11 +1010,15 @@ class IstioIngressCharm(CharmBase):
 
         policy_manager.reconcile(resources)
 
-    def _sync_gateway_resources(self):
+    def _sync_gateway_resources(self, normalized_listeners: List[GatewayListener]):
+        """Synchronize Gateway resources using normalized listeners.
+
+        Args:
+            normalized_listeners: List of normalized Gateway listeners (already merged and deduplicated)
+        """
         unit_count = self.model.app.planned_units()
         krm = self._get_gateway_resource_manager()
         resources_list = []
-        tls_secret_name = None
 
         # Skip reconciliation if no units are left (unit_count < 1):
         #  - This typically indicates an application removal event; we rely on the remove hook for cleanup.
@@ -944,11 +1028,8 @@ class IstioIngressCharm(CharmBase):
         if unit_count > 0:
             if secret := self._construct_gateway_tls_secret():
                 resources_list.append(secret)
-                if secret.metadata is None:
-                    raise ValueError("Unexpected error: secret.metadata is None")
-                tls_secret_name = secret.metadata.name
 
-            resources_list.append(self._construct_gateway(tls_secret_name=tls_secret_name))
+            resources_list.append(self._construct_gateway(normalized_listeners))
             resources_list.append(self._construct_hpa(unit_count))
 
         krm.reconcile(resources_list)
@@ -989,67 +1070,184 @@ class IstioIngressCharm(CharmBase):
         except ApiError:
             return
 
-    def _sync_ingress_resources(self, routes: List[RouteInfo]):
-        """Synchronize the ingress resources to reflect the desired routes."""
-        if not self.unit.is_leader():
-            raise RuntimeError("Ingress can only be provided on the leader unit.")
+    def _construct_httproutes(self, http_routes: List[HTTPRoute]) -> List:
+        """Construct HTTPRoute K8s resources from normalized HTTP routes.
 
+        This method is fully source-agnostic - normalized data already contains charm models.
+
+        Args:
+            http_routes: List of normalized, deduplicated HTTP routes with charm models
+
+        Returns:
+            List of HTTPRoute lightkube resources
+        """
         httproutes = []
-        ingress_to_workload_authorization_policies = []
 
-        # If we can construct a gateway Secret, TLS is enabled so we should configure the routes accordingly
-        is_tls_enabled = self._construct_gateway_tls_secret() is not None
+        for route in http_routes:
+            # Derive listener name from Gateway protocol and port
+            listener_name = f"{route['listener_protocol'].lower()}-{route['listener_port']}"
 
-        for route in routes:
-            if not route["prefix"]:
-                # This should never happen
-                raise RuntimeError(f"Missing prefix in route: {route}")
+            # Construct HTTPRoute resource from normalized data
+            http_route_resource = HTTPRouteResource(
+                metadata=Metadata(
+                    name=route["name"],
+                    namespace=route["namespace"],
+                ),
+                spec=HTTPRouteResourceSpec(
+                    parentRefs=[
+                        ParentRef(
+                            name=self.app.name,
+                            namespace=self.model.name,
+                            sectionName=listener_name,
+                        )
+                    ],
+                    rules=[
+                        HTTPRouteRule(
+                            matches=route["matches"],  # Already charm HTTPRouteMatch models
+                            backendRefs=route["backend_refs"],  # Already charm BackendRef models
+                            filters=route["filters"] if route["filters"] else None,
+                        )
+                    ],
+                ),
+            )
 
-            if is_tls_enabled:
-                # TLS is configured, so we enable HTTPS route and redirect HTTP to HTTPS
-                httproutes.append(
-                    self._construct_redirect_to_https_httproute(
-                        app_name=route["service_name"],
-                        model=route["namespace"],
-                        prefix=route["prefix"],
-                        section_name="http",
-                    )
-                )
-                httproutes.append(
-                    self._construct_httproute(
-                        service_name=route["service_name"],
-                        namespace=route["namespace"],
-                        port=route["port"],
-                        strip_prefix=route["strip_prefix"],
-                        prefix=route["prefix"],
-                        section_name="https",
-                    )
-                )
-            else:
-                # Else, we enable only an HTTP route
-                httproutes.append(
-                    self._construct_httproute(
-                        service_name=route["service_name"],
-                        namespace=route["namespace"],
-                        port=route["port"],
-                        strip_prefix=route["strip_prefix"],
-                        prefix=route["prefix"],
-                        section_name="http",
-                    )
-                )
-
-            ingress_to_workload_authorization_policies.append(
-                self._construct_auth_policy_from_ingress_to_target(
-                    target_name=route["service_name"],
-                    target_namespace=route["namespace"],
-                    target_port=route["port"],
+            # Convert to lightkube resource
+            httproute_lk_resource = RESOURCE_TYPES["HTTPRoute"]
+            httproutes.append(
+                httproute_lk_resource(
+                    metadata=ObjectMeta.from_dict(http_route_resource.metadata.model_dump()),
+                    spec=http_route_resource.spec.model_dump(exclude_none=True),
                 )
             )
 
-        krm = self._get_ingress_route_resource_manager()
+        return httproutes
+
+    def _construct_grpcroutes(self, grpc_routes: List[GRPCRoute]) -> List:
+        """Construct GRPCRoute K8s resources from normalized gRPC routes.
+
+        This method is fully source-agnostic - normalized data already contains charm models.
+
+        Args:
+            grpc_routes: List of normalized, deduplicated gRPC routes with charm models
+
+        Returns:
+            List of GRPCRoute lightkube resources
+        """
+        grpcroutes = []
+
+        for route in grpc_routes:
+            # Derive listener name from Gateway protocol and port
+            listener_name = f"{route['listener_protocol'].lower()}-{route['listener_port']}"
+
+            # Construct GRPCRoute resource from normalized data
+            grpc_route_resource = GRPCRouteResource(
+                metadata=Metadata(
+                    name=route["name"],
+                    namespace=route["namespace"],
+                ),
+                spec=GRPCRouteResourceSpec(
+                    parentRefs=[
+                        ParentRef(
+                            name=self.app.name,
+                            namespace=self.model.name,
+                            sectionName=listener_name,
+                        )
+                    ],
+                    rules=[
+                        GRPCRouteRule(
+                            matches=route["matches"],  # Already charm GRPCRouteMatch models
+                            backendRefs=route["backend_refs"],  # Already charm BackendRef models
+                            filters=route["filters"] if route["filters"] else None,
+                        )
+                    ],
+                ),
+            )
+
+            # Convert to lightkube resource
+            grpcroute_lk_resource = RESOURCE_TYPES["GRPCRoute"]
+            grpcroutes.append(
+                grpcroute_lk_resource(
+                    metadata=ObjectMeta.from_dict(grpc_route_resource.metadata.model_dump()),
+                    spec=grpc_route_resource.spec.model_dump(exclude_none=True),
+                )
+            )
+
+        return grpcroutes
+
+    def _construct_auth_policies(
+        self, http_routes: List[HTTPRoute], grpc_routes: List[GRPCRoute]
+    ) -> List:
+        """Construct L4 authorization policies from normalized routes.
+
+        This method is fully source-agnostic - extracts backend info from normalized routes.
+        Creates one auth policy per unique (service, port, namespace) backend.
+
+        Args:
+            http_routes: List of normalized HTTP routes
+            grpc_routes: List of normalized gRPC routes
+
+        Returns:
+            List of AuthorizationPolicy lightkube resources
+        """
+        auth_policies = []
+        seen_backends = set()
+
+        # Process HTTP routes - extract backends from backend_refs field
+        for route in http_routes:
+            for backend_ref in route["backend_refs"]:
+                backend_key = (backend_ref.name, backend_ref.port, backend_ref.namespace)
+                if backend_key not in seen_backends:
+                    seen_backends.add(backend_key)
+                    auth_policies.append(
+                        self._construct_auth_policy_from_ingress_to_target(
+                            target_name=backend_ref.name,
+                            target_namespace=backend_ref.namespace,
+                            target_port=backend_ref.port,
+                        )
+                    )
+
+        # Process gRPC routes - extract backends from backend_refs field
+        for route in grpc_routes:
+            for backend_ref in route["backend_refs"]:
+                backend_key = (backend_ref.name, backend_ref.port, backend_ref.namespace)
+                if backend_key not in seen_backends:
+                    seen_backends.add(backend_key)
+                    auth_policies.append(
+                        self._construct_auth_policy_from_ingress_to_target(
+                            target_name=backend_ref.name,
+                            target_namespace=backend_ref.namespace,
+                            target_port=backend_ref.port,
+                        )
+                    )
+
+        return auth_policies
+
+    def _sync_ingress_resources(self, http_routes: List[HTTPRoute], grpc_routes: List[GRPCRoute]):
+        """Synchronize all ingress resources (HTTPRoutes, GRPCRoutes, and L4 auth policies) from normalized data.
+
+        This method works on normalized, deduplicated routes from all sources (IPA and istio-ingress-route).
+        It constructs K8s resources source-agnostically.
+
+        Args:
+            http_routes: List of normalized, deduplicated HTTP routes
+            grpc_routes: List of normalized, deduplicated gRPC routes
+        """
+        if not self.unit.is_leader():
+            raise RuntimeError("Ingress can only be provided on the leader unit.")
+
+        # Construct K8s resources from normalized data
+        httproutes = self._construct_httproutes(http_routes)
+        grpcroutes = self._construct_grpcroutes(grpc_routes)
+        auth_policies = self._construct_auth_policies(http_routes, grpc_routes)
+
+        # Reconcile all resources
+        # The ingress route resource manager handles both HTTPRoute and GRPCRoute
+        route_krm = self._get_ingress_route_resource_manager()
+        all_routes = httproutes + grpcroutes
+        route_krm.reconcile(all_routes)
+
         kam = self._get_ingress_auth_policy_resource_manager()
-        krm.reconcile(httproutes)
-        kam.reconcile(ingress_to_workload_authorization_policies)
+        kam.reconcile(auth_policies)
 
     def _ingress_url_with_scheme(self) -> str:
         """Return the url to the ingress managed by this charm, including scheme.
@@ -1157,126 +1355,6 @@ class IstioIngressCharm(CharmBase):
     def format_labels(label_dict: Dict[str, str]) -> str:
         """Format a dictionary into a comma-separated string of key=value pairs."""
         return ",".join(f"{key}={value}" for key, value in label_dict.items())
-
-
-def _get_peer_identity_for_juju_application(app_name, namespace):
-    """Return a Juju application's peer identity.
-
-    Format returned is defined by `principals` in
-    [this reference](https://istio.io/latest/docs/reference/config/security/authorization-policy/#Source):
-
-    This function relies on the Juju convention that each application gets a ServiceAccount of the same name in the same
-    namespace.
-    """
-    return f"cluster.local/ns/{namespace}/sa/{app_name}"
-
-
-def get_relation_by_name_and_app(relations, remote_app_name):
-    """Return the relation object associated with a given remote app."""
-    for rel in relations:
-        if rel.app.name == remote_app_name:
-            return rel
-    raise KeyError(f"Could not find relation with remote_app_name={remote_app_name}")
-
-
-def deduplicate_app_route_data(application_route_data) -> bool:
-    """Remove all routes from any applications that request the same route prefix, editing the input in place.
-
-    For example, given input:
-    application_route_data = {
-        (app0, ingress-relation-A): {"handler": f, "routes"=[RouteInfo(path="path0")],  # <-- Duplicate path0
-        (app1, ingress-relation-A): {"handler": f, "routes"=[RouteInfo(path="path1")],
-        (app2, ingress-relation-B): {"handler": f, "routes"=[RouteInfo(path="path0")],  # <-- Duplicate path0
-        (app3, ingress-relation-B): {"handler": f, "routes"=[RouteInfo(path="path3")],  # <-- Duplicate path3
-        (app4, ingress-relation-B): {"handler": f, "routes"=[RouteInfo(path="path3")],  # <-- Duplicate path3
-    }
-
-    This function would return only:
-    {
-        (app0, ingress-relation-A): {"handler": f, "routes"=[],                         # <-- Duplicate path0
-        (app1, ingress-relation-A): {"handler": f, "routes"=[RouteInfo(path="path1")],
-        (app2, ingress-relation-B): {"handler": f, "routes"=[],                         # <-- Duplicate path0
-        (app3, ingress-relation-B): {"handler": f, "routes"=[],                         # <-- Duplicate path3
-        (app4, ingress-relation-B): {"handler": f, "routes"=[],                         # <-- Duplicate path3
-    }
-    because all other entries have collisions.
-
-    Note that this function does not remove keys from the route map because we still need those later in case we need to
-    nullify what we've previously sent to them via the ingress relation.
-
-    Side effects: this modifies the input in place.
-
-    Return:
-        bool: True if duplicate routes were removed, False otherwise.
-    """
-    # Work on a copy so we don't modify the source object
-    prefix_to_app_map = defaultdict(list)
-    for route_key, route_data in application_route_data.items():
-        for route in route_data["routes"]:
-            prefix_to_app_map[route["prefix"]].append(route_key)
-
-    # Select only prefixes that have multiple routes using them
-    duplicate_prefix_to_app_map = {
-        prefix: route_keys
-        for prefix, route_keys in prefix_to_app_map.items()
-        if len(route_keys) > 1
-    }
-
-    # For any app that has one or more duplicate routes, remove all routes for that app
-    for prefix, route_keys in duplicate_prefix_to_app_map.items():
-        duplicated_app_list = ", ".join(
-            [
-                f"app {app_name} in relation {relation_name}"
-                for app_name, relation_name in route_keys
-            ]
-        )
-        logger.error(
-            f"Ingress through prefix {prefix} requested by more than one application.  Got requests from '{duplicated_app_list}'"
-        )
-        for route_key in route_keys:
-            # Remove all routes for this key
-            application_route_data[route_key]["routes"] = {}
-
-    return len(duplicate_prefix_to_app_map) > 0
-
-
-def get_unauthenticated_paths(application_route_data):
-    """Return a list of the paths requested through the Gateway on the unauthenticated ingress."""
-    unauthenticated_paths = []
-    for (_, endpoint), route_data in application_route_data.items():
-        if endpoint == INGRESS_UNAUTHENTICATED_NAME:
-            for route in route_data["routes"]:
-                # Ensure subpaths are also unauthenticated by appending /*
-                prefix = route["prefix"].rstrip("/")
-                unauthenticated_paths.extend([prefix, prefix + "/*"])
-    return unauthenticated_paths
-
-
-def generate_telemetry_labels(app_name: str, model_name: str) -> Dict[str, str]:
-    """Generate telemetry labels for the application, ensuring it is always <=63 characters and usually unique.
-
-    The telemetry labels need to be unique for each application in order to prevent one application from scraping
-    another's metrics (eg: istio-beacon scraping the workloads of istio-ingress).  Ideally, this would be done by
-    including model_name and app_name in the label key or value, but Kubernetes label keys and values have a 63
-    character limit.  This, thus function returns:
-    * a label with a key that includes model_name and app_name, if that key is less than 63 characters
-    * a label with a key that is truncated to 63 characters but includes a hash of the full model_name and app_name, to
-      attempt to ensure uniqueness.
-
-    The hash is included because simply truncating the model or app names may lead to collisions.  Consider if
-    istio-beacon is deployed to two different models of names `really-long-model-name1` and `really-long-model-name2`,
-    they'd truncate to the same key.  To reduce this risk, we also include a hash of the model and app names which very
-    likely differs between two applications.
-    """
-    key = f"charms.canonical.com/{model_name}.{app_name}.telemetry"
-    if len(key) > 63:
-        # Truncate the key to fit within the 63-character limit.  Include a hash of the real model_name.app_name to
-        # avoid collisions with some other truncated key.
-        hash = hashlib.md5(f"{model_name}.{app_name}".encode()).hexdigest()[:10]
-        key = f"charms.canonical.com/{model_name[:10]}.{app_name[:10]}.{hash}.telemetry"
-    return {
-        key: "aggregated",
-    }
 
 
 if __name__ == "__main__":
