@@ -7,7 +7,7 @@ requires-python = "~=3.8"
 dependencies = [
     "ops~=2.5",
     "pydantic>=2",
-    "lightkube-extensions@git+https://github.com/canonical/lightkube-extensions.git@main",
+    "lightkube-extensions@git+https://github.com/canonical/lightkube-extensions.git@feat/extend-patching-types",
     "cosl",
     "cryptography~=42.0.0", # Deps: tls_certificates_interface libs
     "opentelemetry-exporter-otlp-proto-http==1.21.0", # PYDEPS: lib/charms/tempo_coordinator_k8s/v0/charm_tracing.py
@@ -30,6 +30,9 @@ dev = [
     "pytest-operator",
     "juju",
     "requests",
+    "grpcio",
+    "grpcio-reflection",
+    "grpcio-tools",
 ]
 
 # Testing tools configuration

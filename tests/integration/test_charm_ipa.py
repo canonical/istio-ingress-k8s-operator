@@ -38,7 +38,7 @@ resources = {
 
 
 @pytest.mark.abort_on_fail
-async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
+async def test_deploy_dependencies(ops_test: OpsTest, tester_http_charm):
     """Deploys dependencies across two models: one for Istio and one for ipa-tester.
 
     This test uses a multi-model approach to isolate Istio and the ipa-tester in
@@ -60,14 +60,14 @@ async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
         timeout=1000,
     )
 
-    # Deploy ipa-testers
+    # Deploy HTTP tester charms (for IPA testing)
     await ops_test.model.deploy(
-        ipa_tester_charm,
+        tester_http_charm,
         application_name=IPA_TESTER,
         resources={"echo-server-image": "jmalloc/echo-server:v0.3.7"},
     )
     await ops_test.model.deploy(
-        ipa_tester_charm,
+        tester_http_charm,
         application_name=IPA_TESTER_UNAUTHENTICATED,
         resources={"echo-server-image": "jmalloc/echo-server:v0.3.7"},
     )

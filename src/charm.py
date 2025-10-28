@@ -119,6 +119,9 @@ RESOURCE_TYPES = {
         "AuthorizationPolicy",
         "authorizationpolicies",
     ),
+    "DestinationRule": create_namespaced_resource(
+        "networking.istio.io", "v1", "DestinationRule", "destinationrules"
+    ),
 }
 
 GATEWAY_RESOURCE_TYPES = {RESOURCE_TYPES["Gateway"], Secret, HorizontalPodAutoscaler}
@@ -129,11 +132,13 @@ INGRESS_RESOURCE_TYPES = {
 }
 
 AUTHORIZATION_POLICY_RESOURCE_TYPES = {RESOURCE_TYPES["AuthorizationPolicy"]}
+GRPC_DESTINATION_RULE_RESOURCE_TYPES = {RESOURCE_TYPES["DestinationRule"]}
 
 GATEWAY_SCOPE = "istio-gateway"
 INGRESS_SCOPE = "istio-ingress"
 INGRESS_AUTH_POLICY_SCOPE = "istio-ingress-authorization-policy"
 EXTZ_AUTH_POLICY_SCOPE = "external-authorizer-authorization-policy"
+GRPC_DESTINATION_RULE_SCOPE = "grpc-destination-rule"
 
 INGRESS_CONFIG_RELATION = "istio-ingress-config"
 FORWARD_AUTH_RELATION = "forward-auth"
@@ -331,6 +336,17 @@ class IstioIngressCharm(CharmBase):
                 self.app.name, self.model.name, scope=EXTZ_AUTH_POLICY_SCOPE
             ),
             resource_types=AUTHORIZATION_POLICY_RESOURCE_TYPES,  # pyright: ignore
+            lightkube_client=self.lightkube_client,
+            logger=logger,
+        )
+
+    def _get_grpc_destination_rule_resource_manager(self):
+        """Get KubernetesResourceManager for gRPC DestinationRules."""
+        return KubernetesResourceManager(
+            labels=create_charm_default_labels(
+                self.app.name, self.model.name, scope=GRPC_DESTINATION_RULE_SCOPE
+            ),
+            resource_types=GRPC_DESTINATION_RULE_RESOURCE_TYPES,  # pyright: ignore
             lightkube_client=self.lightkube_client,
             logger=logger,
         )
@@ -1032,43 +1048,12 @@ class IstioIngressCharm(CharmBase):
             resources_list.append(self._construct_gateway(normalized_listeners))
             resources_list.append(self._construct_hpa(unit_count))
 
-        krm.reconcile(resources_list)
-
-        # TODO: Delete below line when we figure out a way to unset hostname on reconcile if set to empty/invalid/unset
-        # this is due to the fact that the patch method used in lk.apply is patch.APPLY (https://github.com/gtsystem/lightkube/blob/75c71426d23963be94412ca6f26f77a7a61ab363/lightkube/core/client.py#L759)
-        # when we omit a field like hostname from the patch, apply does not remove the existing value
-        # it assumes that the omission means "do not change this field," not "delete this field."
-        # also worth noting that setting the value to None to remove it will result into a validation webhook error firing from k8s side
-        if not self._is_valid_hostname(self._ingress_url):
-            self._remove_hostname_if_present()
-
-    def _remove_hostname_if_present(self):
-        """Remove the 'hostname' field from the first listener of the Gateway resource if it is present.
-
-        This is necessary because lightkube.apply with patch.APPLY
-        does not remove fields; it assumes omission means "do not change this field."
-        Setting the value to None results in a validation error from Kubernetes.
-        """
-        try:
-            existing_gateway = self.lightkube_client.get(
-                RESOURCE_TYPES["Gateway"], name=self.app.name, namespace=self.model.name
-            )
-            if existing_gateway.spec and "listeners" in existing_gateway.spec:
-                patches = []
-                for i, listener in enumerate(existing_gateway.spec["listeners"]):
-                    if "hostname" in listener:
-                        patches.append({"op": "remove", "path": f"/spec/listeners/{i}/hostname"})
-
-                if patches:
-                    self.lightkube_client.patch(
-                        RESOURCE_TYPES["Gateway"],
-                        name=self.app.name,
-                        namespace=self.model.name,
-                        obj=patches,
-                        patch_type=PatchType.JSON,
-                    )
-        except ApiError:
-            return
+        # Use PatchType.MERGE for Gateway resources to remove any stale fields in the resource with the same name.
+        # This ensures:
+        # 1. Stale listeners are removed when protocols change (e.g., http-8080 -> https-8080)
+        # 2. Omitted fields like hostname are properly removed from the resource
+        # Without MERGE, Server-Side Apply accumulates stale listeners and preserves omitted fields.
+        krm.reconcile(resources_list, patch_type=PatchType.MERGE)
 
     def _construct_httproutes(self, http_routes: List[HTTPRoute]) -> List:
         """Construct HTTPRoute K8s resources from normalized HTTP routes.
@@ -1222,6 +1207,55 @@ class IstioIngressCharm(CharmBase):
 
         return auth_policies
 
+    def _construct_grpc_destination_rules(self, grpc_routes: List[GRPCRoute]) -> List:
+        """Construct DestinationRules for gRPC backends.
+
+        Creates one DestinationRule per unique (service, namespace) backend
+        with useClientProtocol=true to preserve gRPC protocol through gateway.
+
+        Args:
+            grpc_routes: List of normalized gRPC routes
+
+        Returns:
+            List of DestinationRule lightkube resources
+        """
+        destination_rules = []
+        seen_backends = set()
+
+        for route in grpc_routes:
+            for backend_ref in route["backend_refs"]:
+                # One DR per unique (service, namespace) - not per port
+                backend_key = (backend_ref.name, backend_ref.namespace)
+                if backend_key not in seen_backends:
+                    seen_backends.add(backend_key)
+
+                    # Build FQDN host
+                    host = f"{backend_ref.name}.{backend_ref.namespace}.svc.cluster.local"
+
+                    # Name: {servicename}-grpc-dest-rule-{ingresscharmname}
+                    dr_name = f"{backend_ref.name}-grpc-dest-rule-{self.app.name}"
+
+                    # Create DestinationRule resource in backend's namespace
+                    dr_resource = RESOURCE_TYPES["DestinationRule"](
+                        metadata=ObjectMeta(
+                            name=dr_name,
+                            namespace=backend_ref.namespace,  # Backend's namespace (same as routes)
+                        ),
+                        spec={
+                            "host": host,
+                            "trafficPolicy": {
+                                "connectionPool": {
+                                    "http": {
+                                        "useClientProtocol": True
+                                    }
+                                }
+                            }
+                        }
+                    )
+                    destination_rules.append(dr_resource)
+
+        return destination_rules
+
     def _sync_ingress_resources(self, http_routes: List[HTTPRoute], grpc_routes: List[GRPCRoute]):
         """Synchronize all ingress resources (HTTPRoutes, GRPCRoutes, and L4 auth policies) from normalized data.
 
@@ -1239,6 +1273,17 @@ class IstioIngressCharm(CharmBase):
         httproutes = self._construct_httproutes(http_routes)
         grpcroutes = self._construct_grpcroutes(grpc_routes)
         auth_policies = self._construct_auth_policies(http_routes, grpc_routes)
+
+        # NOTE: The below DestinationRule resource instructs the gateway to use same protocol (http/2, http/1.1 etc) as the client.
+        # According to the istio docs: https://istio.io/latest/docs/ops/configuration/traffic-management/protocol-selection/#http-gateway-protocol-selection
+        # The gateway is unable to determine the protocol of the backend unless explicitly defined using the portname or the appProtocol. By default it wll use http/1.1.
+        # This is problematic because for gRPC backends, the gateway uses http/1.1 as well by default (because there is no valid port-name nor appProtocol). Hence gRPC routing fails.
+        # The charm has no control neither over the port name (auto generated by Juju) nor over the appProtocol (Juju controls the service so we cant reliably patch this).
+        # Hence the only workaround is to create a DestinationRule that instructs the gateway to usee the same protocol as the client request.
+        # This makes sure, when client makes a gRPC request, gateway will automatically use the right http/2 protocol.
+        grpc_drs = self._construct_grpc_destination_rules(grpc_routes)
+        grpc_dr_manager = self._get_grpc_destination_rule_resource_manager()
+        grpc_dr_manager.reconcile(grpc_drs)
 
         # Reconcile all resources
         # The ingress route resource manager handles both HTTPRoute and GRPCRoute

@@ -1,8 +1,8 @@
 # Copyright 2022 Canonical Ltd.
 # See LICENSE file for licensing details.
-name: ipa-requirer-mock
-description: ipa tester
-summary: ipa tester
+name: tester-http
+description: HTTP echo server for testing ingress routes
+summary: HTTP echo server for testing ingress routes
 type: charm
 bases:
   - build-on:
@@ -25,6 +25,9 @@ requires:
     limit: 1
   ingress-2:
     interface: ingress
+    limit: 1
+  istio-ingress-route:
+    interface: istio_ingress_route
     limit: 1
 
 containers:

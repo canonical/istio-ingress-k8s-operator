@@ -4,8 +4,12 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, cast
 from urllib.parse import urlparse
 
+import grpc
 import lightkube
 import requests
+from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
+from grpc import ssl_channel_credentials
+from grpc_reflection.v1alpha import reflection_pb2, reflection_pb2_grpc
 from lightkube.generic_resource import create_namespaced_resource
 from lightkube.resources.autoscaling_v2 import HorizontalPodAutoscaler
 from lightkube.resources.core_v1 import ConfigMap, Service
@@ -42,6 +46,9 @@ RESOURCE_TYPES = {
     ),
     "HTTPRoute": create_namespaced_resource(
         "gateway.networking.k8s.io", "v1", "HTTPRoute", "httproutes"
+    ),
+    "GRPCRoute": create_namespaced_resource(
+        "gateway.networking.k8s.io", "v1", "GRPCRoute", "grpcroutes"
     ),
     "AuthorizationPolicy": create_namespaced_resource(
         "security.istio.io",
@@ -198,6 +205,26 @@ async def get_route_condition(ops_test: OpsTest, route_name: str) -> Optional[Di
         return None
 
 
+async def get_grpc_route_condition(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any]]:
+    """Retrieve and check the condition from the GRPCRoute resource.
+
+    Args:
+        ops_test: pytest-operator plugin
+        route_name: Name of the GRPCRoute resource.
+
+    Returns:
+        A dictionary representing the status of the parent gateway the route is attached to, or None if not found.
+    """
+    model = ops_test.model.name
+    try:
+        c = lightkube.Client()
+        route = c.get(RESOURCE_TYPES["GRPCRoute"], namespace=model, name=route_name)
+        return cast(dict, route.status["parents"][0])
+    except Exception as e:
+        logger.error("Error retrieving GRPCRoute condition: %s", e, exc_info=1)
+        return None
+
+
 async def get_hpa(namespace: str, hpa_name: str) -> Optional[HorizontalPodAutoscaler]:
     """Retrieve the HPA resource so we can inspect .spec and .status directly.
 
@@ -246,18 +273,154 @@ def send_http_request_with_custom_ca(
                                  without a real host, but that we want the request to appear like it is entering a host
     :return: The status code of the response.
     """
-    netloc = urlparse(url).netloc
+    parsed_url = urlparse(url)
+    hostname = parsed_url.hostname  # hostname without port
+    netloc = parsed_url.netloc  # hostname:port (if port present)
+
     if resolve_netloc_to_ip is None:
         resolve_netloc_to_ip = netloc
     headers = {"Host": netloc}
 
     # Use a custom session to handle the custom SSL context and DNS resolution
+    # Pass hostname (without port) to adapter for proper comparison
     session = requests.Session()
     session.mount(
-        "https://", DNSResolverHTTPSAdapter(netloc, resolve_netloc_to_ip, ca_cert=ca_cert)
+        "https://", DNSResolverHTTPSAdapter(hostname, resolve_netloc_to_ip, ca_cert=ca_cert)
     )
     response = session.get(url=url, headers=headers)
     return response.status_code
+
+
+def send_grpc_request(address: str, port: int, service: str, method: str) -> bool:
+    """Sends a gRPC request to the specified service method using reflection.
+
+    :param address: The address of the gRPC server.
+    :param port: The port of the gRPC server.
+    :param service: The full service name (e.g., "grpcbin.GRPCBin").
+    :param method: The method name (e.g., "HeadersUnary").
+    :return: True if the request succeeds, False otherwise.
+    """
+    channel = grpc.insecure_channel(f"{address}:{port}")
+
+    try:
+        # Get the file descriptor for the service
+        stub = reflection_pb2_grpc.ServerReflectionStub(channel)
+        request = reflection_pb2.ServerReflectionRequest(file_containing_symbol=service)
+        responses = stub.ServerReflectionInfo(iter([request]))
+
+        # Build descriptor pool from reflection response
+        pool = descriptor_pool.DescriptorPool()
+        for response in responses:
+            if response.HasField("file_descriptor_response"):
+                for file_descriptor_proto_bytes in (
+                    response.file_descriptor_response.file_descriptor_proto
+                ):
+                    file_descriptor_proto = descriptor_pb2.FileDescriptorProto()
+                    file_descriptor_proto.ParseFromString(file_descriptor_proto_bytes)
+                    pool.Add(file_descriptor_proto)
+
+        # Get the EmptyMessage type (assuming method takes EmptyMessage)
+        # This works for grpcbin's Empty, HeadersUnary, NoResponseUnary, RandomError, etc.
+        empty_message_descriptor = pool.FindMessageTypeByName("grpcbin.EmptyMessage")
+        empty_message_class = message_factory.GetMessageClass(empty_message_descriptor)
+
+        # Create the RPC method stub
+        rpc_method = channel.unary_unary(
+            f"/{service}/{method}",
+            request_serializer=empty_message_class.SerializeToString,
+            response_deserializer=lambda x: x,  # Just return raw bytes
+        )
+
+        # Call the method
+        rpc_method(empty_message_class(), timeout=5)
+        return True
+
+    except Exception as e:
+        logger.error("gRPC request failed: %s", e, exc_info=True)
+        return False
+    finally:
+        channel.close()
+
+
+def send_grpc_request_with_tls(
+    address: str,
+    port: int,
+    service: str,
+    method: str,
+    ca_certificate: str,
+    hostname: Optional[str] = None
+) -> bool:
+    """Send gRPC request with TLS using custom CA certificate.
+
+    :param address: The IP address of the gRPC server.
+    :param port: The port of the gRPC server.
+    :param service: The full service name (e.g., "grpcbin.GRPCBin").
+    :param method: The method name (e.g., "Empty").
+    :param ca_certificate: The CA certificate in PEM format.
+    :param hostname: Optional hostname for SNI (Server Name Indication).
+    :return: True if the request succeeds, False otherwise.
+    """
+    # Create SSL credentials with custom CA
+    credentials = ssl_channel_credentials(root_certificates=ca_certificate.encode())
+
+    # Connect to the IP address
+    target = f"{address}:{port}"
+
+    # If hostname is provided, override the SSL target name for SNI
+    options = []
+    if hostname:
+        options = [("grpc.ssl_target_name_override", hostname)]
+
+    channel = grpc.secure_channel(target, credentials, options=options)
+
+    try:
+        # Get the file descriptor for the service
+        stub = reflection_pb2_grpc.ServerReflectionStub(channel)
+        request = reflection_pb2.ServerReflectionRequest(file_containing_symbol=service)
+        responses = stub.ServerReflectionInfo(iter([request]))
+
+        # Build descriptor pool from reflection response
+        pool = descriptor_pool.DescriptorPool()
+        for response in responses:
+            if response.HasField("file_descriptor_response"):
+                for file_descriptor_proto_bytes in (
+                    response.file_descriptor_response.file_descriptor_proto
+                ):
+                    file_descriptor_proto = descriptor_pb2.FileDescriptorProto()
+                    file_descriptor_proto.ParseFromString(file_descriptor_proto_bytes)
+                    pool.Add(file_descriptor_proto)
+
+        # Get the EmptyMessage type
+        empty_message_descriptor = pool.FindMessageTypeByName("grpcbin.EmptyMessage")
+        empty_message_class = message_factory.GetMessageClass(empty_message_descriptor)
+
+        # Create the RPC method stub
+        rpc_method = channel.unary_unary(
+            f"/{service}/{method}",
+            request_serializer=empty_message_class.SerializeToString,
+            response_deserializer=lambda x: x,
+        )
+
+        # Call the method
+        rpc_method(empty_message_class(), timeout=10)
+        return True
+
+    except Exception as e:
+        logger.error("gRPC TLS request failed: %s", e, exc_info=True)
+        return False
+    finally:
+        channel.close()
+
+
+async def get_ca_certificate(unit) -> str:
+    """Return the CA certificate from a self-signed-certificate unit.
+
+    :param unit: The self-signed-certificates unit.
+    :return: The CA certificate in PEM format.
+    """
+    action = await unit.run_action("get-ca-certificate")
+    result = await action.wait()
+    return result.results["ca-certificate"]
 
 
 class DNSResolverHTTPSAdapter(HTTPAdapter):
@@ -333,7 +496,8 @@ class DNSResolverHTTPSAdapter(HTTPAdapter):
                 )
                 connection_pool_kwargs["server_hostname"] = result.hostname
                 connection_pool_kwargs["assert_hostname"] = result.hostname
-                request.headers["Host"] = result.hostname
+                # Use netloc to preserve port in Host header for non-standard ports
+                request.headers["Host"] = result.netloc
             else:
                 connection_pool_kwargs.pop("server_hostname", None)
                 connection_pool_kwargs.pop("assert_hostname", None)

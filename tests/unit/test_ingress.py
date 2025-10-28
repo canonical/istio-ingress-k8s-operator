@@ -559,3 +559,98 @@ def test_ingress_e2e(
         assert state_out.get_relation(relation.id).local_app_data == expected_ingress_data_sent[i]
 
     assert isinstance(state_out.unit_status, ActiveStatus)
+
+
+def test_construct_grpc_destination_rules(istio_ingress_charm, istio_ingress_context):
+    """Test that _construct_grpc_destination_rules creates DestinationRules correctly."""
+    from models import BackendRef, GRPCMethodMatch, GRPCRouteMatch
+
+    # Create test gRPC routes with some duplicate backends to test deduplication
+    grpc_routes = [
+        # Route 1: tester-grpc service on port 9000
+        {
+            "name": "tester-grpc-empty-route-grpcroute-http-9000-istio-ingress-k8s",
+            "listener_port": 9000,
+            "listener_protocol": "HTTP",
+            "namespace": "test-namespace",
+            "source_app": "tester-grpc",
+            "source_relation": "istio-ingress-route",
+            "matches": [
+                GRPCRouteMatch(
+                    method=GRPCMethodMatch(service="grpcbin.GRPCBin", method="Empty")
+                )
+            ],
+            "backend_refs": [
+                BackendRef(name="tester-grpc", port=9000, namespace="test-namespace")
+            ],
+            "filters": [],
+        },
+        # Route 2: Same service (duplicate backend - should be deduplicated)
+        {
+            "name": "tester-grpc-headersunary-route-grpcroute-http-9000-istio-ingress-k8s",
+            "listener_port": 9000,
+            "listener_protocol": "HTTP",
+            "namespace": "test-namespace",
+            "source_app": "tester-grpc",
+            "source_relation": "istio-ingress-route",
+            "matches": [
+                GRPCRouteMatch(
+                    method=GRPCMethodMatch(service="grpcbin.GRPCBin", method="HeadersUnary")
+                )
+            ],
+            "backend_refs": [
+                BackendRef(name="tester-grpc", port=9000, namespace="test-namespace")
+            ],
+            "filters": [],
+        },
+        # Route 3: Different service in different namespace
+        {
+            "name": "another-service-route-grpcroute-http-9001-istio-ingress-k8s",
+            "listener_port": 9001,
+            "listener_protocol": "HTTP",
+            "namespace": "other-namespace",
+            "source_app": "another-app",
+            "source_relation": "istio-ingress-route",
+            "matches": [
+                GRPCRouteMatch(
+                    method=GRPCMethodMatch(service="another.Service", method="Method")
+                )
+            ],
+            "backend_refs": [
+                BackendRef(name="another-service", port=9001, namespace="other-namespace")
+            ],
+            "filters": [],
+        },
+    ]
+
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(leader=True),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        destination_rules = charm._construct_grpc_destination_rules(grpc_routes)
+
+        # Should create 2 DestinationRules (tester-grpc deduplicated, another-service)
+        assert len(destination_rules) == 2
+
+        # Find the tester-grpc DestinationRule
+        tester_grpc_dr = next(
+            dr for dr in destination_rules
+            if dr.metadata.name == "tester-grpc-grpc-dest-rule-istio-ingress-k8s"
+        )
+
+        # Verify tester-grpc DestinationRule
+        assert tester_grpc_dr.metadata.namespace == "test-namespace"
+        assert tester_grpc_dr.spec["host"] == "tester-grpc.test-namespace.svc.cluster.local"
+        assert tester_grpc_dr.spec["trafficPolicy"]["connectionPool"]["http"]["useClientProtocol"] is True
+
+        # Find the another-service DestinationRule
+        another_service_dr = next(
+            dr for dr in destination_rules
+            if dr.metadata.name == "another-service-grpc-dest-rule-istio-ingress-k8s"
+        )
+
+        # Verify another-service DestinationRule
+        assert another_service_dr.metadata.namespace == "other-namespace"
+        assert another_service_dr.spec["host"] == "another-service.other-namespace.svc.cluster.local"
+        assert another_service_dr.spec["trafficPolicy"]["connectionPool"]["http"]["useClientProtocol"] is True
