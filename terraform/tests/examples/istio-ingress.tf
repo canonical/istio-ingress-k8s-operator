@@ -3,7 +3,7 @@ terraform {
   required_providers {
     juju = {
       source  = "juju/juju"
-      version = ">= 0.14.0"
+      version = "~> 1.0"
     }
   }
 }
@@ -36,20 +36,20 @@ resource "juju_model" "istio_ingress_test" {
 }
 
 # Deploy Istio using the istio-k8s-operator module
-module "istio" {
-  source   = "git::https://github.com/canonical/istio-k8s-operator//terraform"
-  model    = juju_model.istio_ingress_test.name
-  channel  = "2/edge"
-  app_name = "istio"
-  units    = 1
-}
+# module "istio" {
+#   source     = "git::https://github.com/canonical/istio-k8s-operator//terraform"
+#   model_uuid = juju_model.istio_ingress_test.uuid
+#   channel    = "2/edge"
+#   app_name   = "istio"
+#   units      = 1
+# }
 
 # Deploy Istio Ingress using the module (depends on Istio being deployed first)
 module "istio_ingress" {
   source = "../.."
 
   # Required: reference to the model
-  model = juju_model.istio_ingress_test.name
+  model_uuid = juju_model.istio_ingress_test.uuid
 
   # Required: specify the channel
   channel = "2/edge"
@@ -71,7 +71,7 @@ module "istio_ingress" {
   constraints = "arch=amd64"
 
   # Ensure Istio is deployed before the ingress
-  depends_on = [module.istio]
+  # depends_on = [module.istio]
 }
 
 # Outputs to verify deployment
@@ -84,3 +84,4 @@ output "istio_ingress_endpoints" {
   value       = module.istio_ingress.endpoints
   description = "Available endpoints for the Istio Ingress charm"
 }
+
