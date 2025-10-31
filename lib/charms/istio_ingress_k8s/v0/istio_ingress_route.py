@@ -195,7 +195,7 @@ class ProtocolType(str, Enum):
         >>> # Consumer specifies GRPC
         >>> Listener(name="grpc", port=9090, protocol=ProtocolType.GRPC)
         # If TLS available: Gateway serves HTTPS (HTTP/2 + TLS) on port 9090
-        # If TLS not available: Gateway serves HTTP (h2c) on port 9090
+        # If TLS not available: Gateway serves HTTP on port 9090
     """
 
     HTTP = "HTTP"
@@ -211,7 +211,7 @@ def to_gateway_protocol(protocol: ProtocolType, tls_enabled: bool = False) -> st
     """Map application protocol to Gateway API protocol.
 
     The Gateway API doesn't have separate HTTP/gRPC protocol types.
-    Both use HTTP/2, with the difference being in the route type (HTTPRoute vs GRPCRoute).
+    Both use HTTP, with the difference being in the route type (HTTPRoute vs GRPCRoute).
 
     Args:
         protocol: Application-level protocol (HTTP or GRPC)

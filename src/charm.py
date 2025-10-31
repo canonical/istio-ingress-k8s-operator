@@ -728,14 +728,16 @@ class IstioIngressCharm(CharmBase):
         * Check authentication configuration.
         * Publish or clear the auth_decisions_address in ingress-config, if related.
         * If auth relation exists but no decisions address, set to blocked and remove gateway.
-        * Fetch route information from the ingress relation
+        * Fetch route information from the ingress relation.
+        * Fetch route and listeners information from the istio-ingress-route relation.
+        * Aggregate and deduplicate the routes and listeners from all supported ingress relations.
         * Synchronize external authorization configuration.
             - If missing valid ingress-config relation when auth is provided, set to blocked and remove gateway.
         * Reconcile HPA and gateway resources to align replicas with unit count and ensure gateway readiness.
         * Validate the external hostname.
-        * Synchronize ingress resources
+        * Synchronize ingress resources.
         * Publish route information to ingressed applications
-        * Set up the proxy service
+        * Set up the proxy service.
         * Update forward auth relation data with ingressed apps.
         * Request certificate inspection.
         """
