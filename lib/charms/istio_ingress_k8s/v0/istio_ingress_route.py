@@ -17,43 +17,6 @@ cd some-charm
 charmcraft fetch-lib charms.istio_ingress_k8s.v0.istio_ingress_route
 ```
 
-To use the library from the provider side (istio-ingress):
-
-```yaml
-provides:
-    istio-ingress-route:
-        interface: istio_ingress_route
-```
-
-```python
-from charms.istio_ingress_k8s.v0.istio_ingress_route import IstioIngressRouteProvider
-
-class IstioIngressCharm(CharmBase):
-  def __init__(self, *args):
-    # ...
-    self.istio_ingress_route = IstioIngressRouteProvider(
-        self,
-        external_host=self._external_host,
-        tls_enabled=self._is_tls_enabled(),
-    )
-
-    self.framework.observe(
-        self.istio_ingress_route.on.ready, self._handle_istio_ingress_route_ready
-    )
-
-    def _handle_istio_ingress_route_ready(self, event):
-        config = self.istio_ingress_route.get_config(event.relation)
-        if not config:
-            return
-
-        # Transform listeners based on TLS availability
-        is_tls_enabled = self._is_tls_enabled()
-        for listener in config.listeners:
-            gateway_protocol = to_gateway_protocol(listener.protocol, is_tls_enabled)
-            # Use gateway_protocol to create Gateway listeners
-            # Create HTTPRoutes and GRPCRoutes from config
-```
-
 To use the library from the requirer side:
 
 ```yaml
@@ -134,6 +97,43 @@ class MyCharm(CharmBase):
       url = f"{scheme}://{self.ingress.external_host}"
       # Use this URL for your application configuration
 ```
+
+To use the library from the provider side (istio-ingress):
+
+```yaml
+provides:
+    istio-ingress-route:
+        interface: istio_ingress_route
+```
+
+```python
+from charms.istio_ingress_k8s.v0.istio_ingress_route import IstioIngressRouteProvider
+
+class IstioIngressCharm(CharmBase):
+  def __init__(self, *args):
+    # ...
+    self.istio_ingress_route = IstioIngressRouteProvider(
+        self,
+        external_host=self._external_host,
+        tls_enabled=self._is_tls_enabled(),
+    )
+
+    self.framework.observe(
+        self.istio_ingress_route.on.ready, self._handle_istio_ingress_route_ready
+    )
+
+    def _handle_istio_ingress_route_ready(self, event):
+        config = self.istio_ingress_route.get_config(event.relation)
+        if not config:
+            return
+
+        # Transform listeners based on TLS availability
+        is_tls_enabled = self._is_tls_enabled()
+        for listener in config.listeners:
+            gateway_protocol = to_gateway_protocol(listener.protocol, is_tls_enabled)
+            # Use gateway_protocol to create Gateway listeners
+            # Create HTTPRoutes and GRPCRoutes from config
+```
 """
 
 import logging
@@ -201,7 +201,7 @@ class ProtocolType(str, Enum):
     HTTP = "HTTP"
     GRPC = "GRPC"
 
-    # TODO: Extend support to L4 protocols?
+    # TODO: Extend support to L4 protocols. See https://github.com/canonical/istio-ingress-k8s-operator/issues/114.
     # TCP = "TCP"
     # UDP = "UDP"
 
