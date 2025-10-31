@@ -38,7 +38,7 @@ resources = {
 
 
 @pytest.mark.abort_on_fail
-async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
+async def test_deploy_dependencies(ops_test: OpsTest, tester_http_charm):
     """Deploys dependencies across two models: one for Istio and one for ipa-tester.
 
     This test uses a multi-model approach to isolate Istio and the ipa-tester in
@@ -60,14 +60,14 @@ async def test_deploy_dependencies(ops_test: OpsTest, ipa_tester_charm):
         timeout=1000,
     )
 
-    # Deploy ipa-testers
+    # Deploy HTTP tester charms (for IPA testing)
     await ops_test.model.deploy(
-        ipa_tester_charm,
+        tester_http_charm,
         application_name=IPA_TESTER,
         resources={"echo-server-image": "jmalloc/echo-server:v0.3.7"},
     )
     await ops_test.model.deploy(
-        ipa_tester_charm,
+        tester_http_charm,
         application_name=IPA_TESTER_UNAUTHENTICATED,
         resources={"echo-server-image": "jmalloc/echo-server:v0.3.7"},
     )
@@ -194,7 +194,8 @@ async def test_route_validity(
 
     for ipa_tester in [IPA_TESTER, IPA_TESTER_UNAUTHENTICATED]:
         tester_url = f"http://{istio_ingress_address}/{model}-{ipa_tester}"
-        route_condition = await get_route_condition(ops_test, f"{ipa_tester}-http-{APP_NAME}")
+        # the route name will follow the format {ingressed_app_name}-{httproute or grpcroute}-{listener_name}-{ingress_app_name}
+        route_condition = await get_route_condition(ops_test, f"{ipa_tester}-httproute-http-80-{APP_NAME}")
 
         assert route_condition["conditions"][0]["message"] == "Route was valid"
         assert route_condition["conditions"][0]["reason"] == "Accepted"

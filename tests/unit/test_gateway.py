@@ -18,6 +18,30 @@ from lightkube.resources.core_v1 import Secret
 from ops import ActiveStatus
 
 from charm import IstioIngressCharm
+from utils import GatewayListener
+
+
+def create_test_listeners(
+    ports=(80,), protocols=("HTTP",), tls_secret_names=(None,), source_apps=("test-app",)
+):
+    """Create normalized GatewayListener list for testing."""
+    max_len = max(len(ports), len(protocols), len(tls_secret_names), len(source_apps))
+    ports = ports + (ports[-1],) * (max_len - len(ports)) if ports else (80,) * max_len
+    protocols = protocols + (protocols[-1],) * (max_len - len(protocols)) if protocols else ("HTTP",) * max_len
+    tls_secret_names = tls_secret_names + (tls_secret_names[-1],) * (max_len - len(tls_secret_names)) if tls_secret_names else (None,) * max_len
+    source_apps = source_apps + (source_apps[-1],) * (max_len - len(source_apps)) if source_apps else ("test-app",) * max_len
+
+    return [
+        GatewayListener(
+            port=port,
+            gateway_protocol=protocol,
+            tls_secret_name=tls_secret_name,
+            source_app=source_app,
+        )
+        for port, protocol, tls_secret_name, source_app in zip(
+            ports, protocols, tls_secret_names, source_apps
+        )
+    ]
 
 
 def test_construct_gateway(istio_ingress_charm, istio_ingress_context):
@@ -27,10 +51,11 @@ def test_construct_gateway(istio_ingress_charm, istio_ingress_context):
         state=scenario.State(),
     ) as manager:
         charm = manager.charm
-        gateway = charm._construct_gateway()
+        normalized_listeners = create_test_listeners()
+        gateway = charm._construct_gateway(normalized_listeners)
 
         # Simple spot check of the Gateway object
-        assert gateway.spec["listeners"][0]["name"] == "http"
+        assert gateway.spec["listeners"][0]["name"] == "http-80"
 
         # Assert that TLS is not configured
         assert gateway.spec["listeners"][0].get("tls", None) is None
@@ -51,10 +76,11 @@ def test_construct_gateway_with_loadbalancer_address(
         state=scenario.State(),
     ) as manager:
         charm = manager.charm
-        gateway = charm._construct_gateway()
+        normalized_listeners = create_test_listeners()
+        gateway = charm._construct_gateway(normalized_listeners)
 
         # Assert that the Gateway has an http listener with the correct configurations
-        _validate_gateway_listener(gateway, "http", hostname, tls_secret_name=None)
+        _validate_gateway_listener(gateway, "http-80", hostname, tls_secret_name=None)
 
 
 @patch(
@@ -68,17 +94,22 @@ def test_construct_gateway_with_tls(
     """Assert that when TLS is configured, the Gateway definition is constructed using TLS as expected."""
     hostname = "example.com"
     mock_get_lb_external_address.return_value = hostname
+    tls_secret_name = "tls-secret"
     with istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(),
     ) as manager:
         charm = manager.charm
-        tls_secret_name = "tls-secret"
-        gateway = charm._construct_gateway(tls_secret_name=tls_secret_name)
+        normalized_listeners = create_test_listeners(
+            ports=(80, 443),
+            protocols=("HTTP", "HTTPS"),
+            tls_secret_names=(None, tls_secret_name),
+        )
+        gateway = charm._construct_gateway(normalized_listeners)
 
         # Assert that the Gateway has http and https listeners with the correct configurations.
-        _validate_gateway_listener(gateway, "http", hostname, tls_secret_name=None)
-        _validate_gateway_listener(gateway, "https", hostname, tls_secret_name=tls_secret_name)
+        _validate_gateway_listener(gateway, "http-80", hostname, tls_secret_name=None)
+        _validate_gateway_listener(gateway, "https-443", hostname, tls_secret_name=tls_secret_name)
 
 
 def test_sync_gateway_resources_without_tls(istio_ingress_charm, istio_ingress_context):
@@ -92,17 +123,18 @@ def test_sync_gateway_resources_without_tls(istio_ingress_charm, istio_ingress_c
     ) as manager:
         charm = manager.charm
         charm._get_gateway_resource_manager = mock_krm_factory
-        charm._sync_gateway_resources()
+        normalized_listeners = create_test_listeners()
+        charm._sync_gateway_resources(normalized_listeners)
 
         # Assert that we've tried to reconcile the kubernetes resources
         charm._get_gateway_resource_manager().reconcile.assert_called_once()
 
         # Assert that the Gateway resource has been created with only an http listener
         gateway = charm._get_gateway_resource_manager().reconcile.call_args[0][0][0]
-        _validate_gateway_listener(gateway, "http", tls_secret_name=None)
+        _validate_gateway_listener(gateway, "http-80", tls_secret_name=None)
 
         with pytest.raises(KeyError):
-            _get_listener_given_name(gateway, "https")
+            _get_listener_given_name(gateway, "https-443")
 
 
 @patch(
@@ -123,17 +155,18 @@ def test_sync_gateway_resources_with_tls_without_loadbalancer_address(
     ) as manager:
         charm = manager.charm
         charm._get_gateway_resource_manager = mock_krm_factory
-        charm._sync_gateway_resources()
+        normalized_listeners = create_test_listeners()
+        charm._sync_gateway_resources(normalized_listeners)
 
         # Assert that we've tried to reconcile the kubernetes resources
         charm._get_gateway_resource_manager().reconcile.assert_called_once()
 
         # Assert that the Gateway resource has been created with only an http listener
         gateway = charm._get_gateway_resource_manager().reconcile.call_args[0][0][0]
-        _validate_gateway_listener(gateway, "http", tls_secret_name=None)
+        _validate_gateway_listener(gateway, "http-80", tls_secret_name=None)
 
         with pytest.raises(KeyError):
-            _get_listener_given_name(gateway, "https")
+            _get_listener_given_name(gateway, "https-443")
 
 
 @patch("charm.IstioIngressCharm._get_lb_external_address", new_callable=PropertyMock)
@@ -153,7 +186,12 @@ def test_sync_gateway_resources_with_tls_with_loadbalancer_address(
     ) as manager:
         charm = manager.charm
         charm._get_gateway_resource_manager = mock_krm_factory
-        charm._sync_gateway_resources()
+        normalized_listeners = create_test_listeners(
+            ports=(80, 443),
+            protocols=("HTTP", "HTTPS"),
+            tls_secret_names=(None, charm._certificate_secret_name),
+        )
+        charm._sync_gateway_resources(normalized_listeners)
 
         # Assert that we've tried to reconcile the kubernetes resources
         charm._get_gateway_resource_manager().reconcile.assert_called_once()
@@ -164,9 +202,9 @@ def test_sync_gateway_resources_with_tls_with_loadbalancer_address(
 
         # Assert that the Gateway was created and has http and https listeners with the correct configurations.
         gateway = charm._get_gateway_resource_manager().reconcile.call_args[0][0][1]
-        _validate_gateway_listener(gateway, "http", hostname, tls_secret_name=None)
+        _validate_gateway_listener(gateway, "http-80", hostname, tls_secret_name=None)
         _validate_gateway_listener(
-            gateway, "https", hostname, tls_secret_name=charm._certificate_secret_name
+            gateway, "https-443", hostname, tls_secret_name=charm._certificate_secret_name
         )
 
 
@@ -187,7 +225,12 @@ def test_sync_gateway_resources_with_tls_with_external_hostname_config(
     ) as manager:
         charm = manager.charm
         charm._get_gateway_resource_manager = mock_krm_factory
-        charm._sync_gateway_resources()
+        normalized_listeners = create_test_listeners(
+            ports=(80, 443),
+            protocols=("HTTP", "HTTPS"),
+            tls_secret_names=(None, charm._certificate_secret_name),
+        )
+        charm._sync_gateway_resources(normalized_listeners)
 
         # Assert that we've tried to reconcile the kubernetes resources
         charm._get_gateway_resource_manager().reconcile.assert_called_once()
@@ -198,9 +241,9 @@ def test_sync_gateway_resources_with_tls_with_external_hostname_config(
 
         # Assert that the Gateway was created and has http and https listeners with the correct configurations.
         gateway = charm._get_gateway_resource_manager().reconcile.call_args[0][0][1]
-        _validate_gateway_listener(gateway, "http", hostname, tls_secret_name=None)
+        _validate_gateway_listener(gateway, "http-80", hostname, tls_secret_name=None)
         _validate_gateway_listener(
-            gateway, "https", hostname, tls_secret_name=charm._certificate_secret_name
+            gateway, "https-443", hostname, tls_secret_name=charm._certificate_secret_name
         )
 
 
@@ -235,10 +278,10 @@ def test_sync_gateway_resources_with_tls(
         state=scenario.State(),
     ) as manager:
         charm = manager.charm
-        charm._sync_gateway_resources()
-        # Assert that the Gateway resource has been created with expected secret name
-        secret_name = tls_secret.metadata.name if tls_secret else None
-        mocked_construct_gateway.assert_called_once_with(tls_secret_name=secret_name)
+        normalized_listeners = create_test_listeners()
+        charm._sync_gateway_resources(normalized_listeners)
+        # Assert that the Gateway resource has been created with the normalized listeners
+        mocked_construct_gateway.assert_called_once_with(normalized_listeners)
 
 
 def test_construct_gateway_tls_secret_with_certificates(

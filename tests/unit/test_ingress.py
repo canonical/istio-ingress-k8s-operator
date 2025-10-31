@@ -7,84 +7,97 @@ import pytest
 import scenario
 from ops import ActiveStatus
 
-from charm import IstioIngressCharm, RouteInfo, get_unauthenticated_paths
-from models import HTTPRouteFilterType
-from tests.unit.test_gateway import generate_certificates_relation
-
-
-@pytest.mark.parametrize(
-    "strip_prefix, filters",
-    [
-        # If strip_prefix == True, we should have a URLRewrite filter with ReplacePrefixMatch of "/"
-        (
-            True,
-            [
-                {
-                    "type": HTTPRouteFilterType.URLRewrite,
-                    "urlRewrite": {
-                        "path": {"type": "ReplacePrefixMatch", "replacePrefixMatch": "/"}
-                    },
-                }
-            ],
-        ),
-        (False, []),
-    ],
+from charm import IstioIngressCharm
+from models import (
+    BackendRef,
+    HTTPPathMatch,
+    HTTPRequestRedirectFilter,
+    HTTPRouteFilter,
+    HTTPRouteFilterType,
+    HTTPRouteMatch,
 )
-def test_construct_httproute_with_strip_prefix(
-    strip_prefix, filters, istio_ingress_charm, istio_ingress_context
-):
-    """Test that the _construct_httproute method constructs an HTTPRoute object correctly."""
-    service_name = "app_name"
-    namespace = "model"
-    port = 1234
-    prefix = "prefix"
-    section_name = "section"
-
-    with istio_ingress_context(
-        istio_ingress_context.on.update_status(),
-        state=scenario.State(),
-    ) as manager:
-        charm: IstioIngressCharm = manager.charm
-        httproute = charm._construct_httproute(
-            service_name=service_name,
-            namespace=namespace,
-            port=port,
-            prefix=prefix,
-            section_name=section_name,
-            strip_prefix=strip_prefix,
-        )
-
-        assert httproute.spec["rules"][0]["filters"] == filters
+from tests.unit.test_gateway import generate_certificates_relation
+from utils import HTTPRoute, RouteInfo, get_unauthenticated_paths
 
 
-def test_construct_httproute(istio_ingress_charm, istio_ingress_context):
-    """Test that the _construct_httproute method constructs an HTTPRoute object correctly."""
-    service_name = "app_name"
-    namespace = "model"
-    port = 1234
-    strip_prefix = False
-    prefix = "prefix"
-    section_name = "section"
-
-    with istio_ingress_context(
-        istio_ingress_context.on.update_status(),
-        state=scenario.State(),
-    ) as manager:
-        charm: IstioIngressCharm = manager.charm
-        httproute = charm._construct_httproute(
-            service_name=service_name,
-            namespace=namespace,
-            port=port,
-            strip_prefix=strip_prefix,
-            prefix=prefix,
-            section_name=section_name,
-        )
-
-        # Assert that we have a single rule and spot check that rule for correctness
-        assert len(httproute.spec["parentRefs"]) == 1
-        assert httproute.spec["parentRefs"][0]["sectionName"] == section_name
-        assert len(httproute.spec["rules"]) == 1
-        assert httproute.spec["rules"][0]["backendRefs"][0]["port"] == port
+def create_test_http_routes(routes_info, with_tls=False):
+    """Create normalized HTTPRoute list for testing."""
+    http_routes = []
+    for route_info in routes_info:
+        if with_tls:
+            # When TLS is enabled, HTTP route (port 80) should be a redirect
+            http_routes.append(
+                HTTPRoute(
+                    name=route_info["service_name"],
+                    listener_port=80,
+                    listener_protocol="HTTP",
+                    namespace=route_info["namespace"],
+                    source_app=route_info["service_name"],
+                    source_relation="ingress",
+                    matches=[
+                        HTTPRouteMatch(
+                            path=HTTPPathMatch(type="PathPrefix", value=route_info["prefix"])
+                        )
+                    ],
+                    backend_refs=[],  # Redirects don't have backends
+                    filters=[
+                        HTTPRouteFilter(
+                            type=HTTPRouteFilterType.RequestRedirect,
+                            requestRedirect=HTTPRequestRedirectFilter(scheme="https", statusCode=301),
+                        )
+                    ],
+                )
+            )
+            # HTTPS route on port 443 with actual backend
+            http_routes.append(
+                HTTPRoute(
+                    name=route_info["service_name"] + "-https",
+                    listener_port=443,
+                    listener_protocol="HTTPS",
+                    namespace=route_info["namespace"],
+                    source_app=route_info["service_name"],
+                    source_relation="ingress",
+                    matches=[
+                        HTTPRouteMatch(
+                            path=HTTPPathMatch(type="PathPrefix", value=route_info["prefix"])
+                        )
+                    ],
+                    backend_refs=[
+                        BackendRef(
+                            name=route_info["service_name"],
+                            port=route_info["port"],
+                            namespace=route_info["namespace"],
+                        )
+                    ],
+                    filters=[],
+                )
+            )
+        else:
+            # Without TLS, just create normal HTTP route on port 80
+            http_routes.append(
+                HTTPRoute(
+                    name=route_info["service_name"],
+                    listener_port=80,
+                    listener_protocol="HTTP",
+                    namespace=route_info["namespace"],
+                    source_app=route_info["service_name"],
+                    source_relation="ingress",
+                    matches=[
+                        HTTPRouteMatch(
+                            path=HTTPPathMatch(type="PathPrefix", value=route_info["prefix"])
+                        )
+                    ],
+                    backend_refs=[
+                        BackendRef(
+                            name=route_info["service_name"],
+                            port=route_info["port"],
+                            namespace=route_info["namespace"],
+                        )
+                    ],
+                    filters=[],
+                )
+            )
+    return http_routes
 
 
 def test_construct_ingress_auth_policy(istio_ingress_charm, istio_ingress_context):
@@ -124,35 +137,6 @@ def test_construct_ingress_auth_policy(istio_ingress_charm, istio_ingress_contex
         assert auth_policy.spec["selector"] == {
             "matchLabels": {"app.kubernetes.io/name": "app-name"}
         }
-
-
-def test_construct_redirect_to_https_httproute(istio_ingress_charm, istio_ingress_context):
-    """Test that _construct_redirect_to_https_httproute constructs an HTTPRoute for redirecting to HTTPS correctly."""
-    app_name = "app-name"
-    model = "model-name"
-    prefix = "prefix"
-    section_name = "section"
-
-    with istio_ingress_context(
-        istio_ingress_context.on.update_status(),
-        state=scenario.State(),
-    ) as manager:
-        charm: IstioIngressCharm = manager.charm
-        httproute = charm._construct_redirect_to_https_httproute(
-            app_name=app_name,
-            model=model,
-            prefix=prefix,
-            section_name=section_name,
-        )
-
-        # Assert that we have a single rule that has a redirect filter and no backend refs
-        assert len(httproute.spec["parentRefs"]) == 1
-        assert httproute.metadata.name == f"{app_name}-{section_name}-{charm.app.name}"
-        assert httproute.spec["parentRefs"][0]["sectionName"] == section_name
-        assert len(httproute.spec["rules"]) == 1
-        assert len(httproute.spec["rules"][0].get("backendRefs", [])) == 0
-        assert len(httproute.spec["rules"][0]["filters"]) == 1
-        assert httproute.spec["rules"][0]["filters"][0]["type"] == "RequestRedirect"
 
 
 def generate_ingress_relation_data(
@@ -253,7 +237,8 @@ def test_sync_ingress_resources(
         charm._get_ingress_auth_policy_resource_manager = mock_auth_manager_factory
 
         # Call the method under test
-        charm._sync_ingress_resources(routes=routes)
+        http_routes = create_test_http_routes(routes)
+        charm._sync_ingress_resources(http_routes=http_routes, grpc_routes=[])
 
         # Assertions: Managers' reconcile methods are called once
         mock_ingress_manager.reconcile.assert_called_once()
@@ -270,7 +255,7 @@ def test_sync_ingress_resources(
         # Assertions: Verify each ingress resource's structure
         for route, prefix in zip(ingress_resources, expected_ingressed_prefixes):
             assert len(route.spec["parentRefs"]) == 1
-            assert route.spec["parentRefs"][0]["sectionName"] == "http"
+            assert route.spec["parentRefs"][0]["sectionName"] == "http-80"
             assert route.spec["rules"][0]["matches"][0]["path"]["value"] == prefix
 
         # Assertions: Verify authorization resources
@@ -342,7 +327,8 @@ def test_sync_ingress_resources_with_tls(
     ) as manager:
         charm: IstioIngressCharm = manager.charm
         charm._get_ingress_route_resource_manager = mock_krm_factory
-        charm._sync_ingress_resources(routes=routes)
+        http_routes = create_test_http_routes(routes, with_tls=True)
+        charm._sync_ingress_resources(http_routes=http_routes, grpc_routes=[])
 
         # Assert that we've tried to reconcile the kubernetes resources
         charm._get_ingress_route_resource_manager().reconcile.assert_called_once()
@@ -353,13 +339,13 @@ def test_sync_ingress_resources_with_tls(
         assert len(resources) == n_routes_expected
         # If TLS is configured, HTTP routes should be redirects and HTTPS routes should route to a parentRef
         for route in resources:
-            if route.spec["parentRefs"][0]["sectionName"] == "http":
+            if route.spec["parentRefs"][0]["sectionName"] == "http-80":
                 assert len(route.spec["rules"]) == 1
                 assert len(route.spec["rules"][0]["filters"]) == 1
                 assert route.spec["rules"][0]["filters"][0]["type"] == "RequestRedirect"
-            elif route.spec["parentRefs"][0]["sectionName"] == "https":
+            elif route.spec["parentRefs"][0]["sectionName"] == "https-443":
                 assert len(route.spec["parentRefs"]) == 1
-                assert route.spec["parentRefs"][0]["sectionName"] == "https"
+                assert route.spec["parentRefs"][0]["sectionName"] == "https-443"
             else:
                 raise AssertionError("Unexpected section name")
 
@@ -573,3 +559,98 @@ def test_ingress_e2e(
         assert state_out.get_relation(relation.id).local_app_data == expected_ingress_data_sent[i]
 
     assert isinstance(state_out.unit_status, ActiveStatus)
+
+
+def test_construct_grpc_destination_rules(istio_ingress_charm, istio_ingress_context):
+    """Test that _construct_grpc_destination_rules creates DestinationRules correctly."""
+    from models import BackendRef, GRPCMethodMatch, GRPCRouteMatch
+
+    # Create test gRPC routes with some duplicate backends to test deduplication
+    grpc_routes = [
+        # Route 1: tester-grpc service on port 9000
+        {
+            "name": "tester-grpc-empty-route-grpcroute-http-9000-istio-ingress-k8s",
+            "listener_port": 9000,
+            "listener_protocol": "HTTP",
+            "namespace": "test-namespace",
+            "source_app": "tester-grpc",
+            "source_relation": "istio-ingress-route",
+            "matches": [
+                GRPCRouteMatch(
+                    method=GRPCMethodMatch(service="grpcbin.GRPCBin", method="Empty")
+                )
+            ],
+            "backend_refs": [
+                BackendRef(name="tester-grpc", port=9000, namespace="test-namespace")
+            ],
+            "filters": [],
+        },
+        # Route 2: Same service (duplicate backend - should be deduplicated)
+        {
+            "name": "tester-grpc-headersunary-route-grpcroute-http-9000-istio-ingress-k8s",
+            "listener_port": 9000,
+            "listener_protocol": "HTTP",
+            "namespace": "test-namespace",
+            "source_app": "tester-grpc",
+            "source_relation": "istio-ingress-route",
+            "matches": [
+                GRPCRouteMatch(
+                    method=GRPCMethodMatch(service="grpcbin.GRPCBin", method="HeadersUnary")
+                )
+            ],
+            "backend_refs": [
+                BackendRef(name="tester-grpc", port=9000, namespace="test-namespace")
+            ],
+            "filters": [],
+        },
+        # Route 3: Different service in different namespace
+        {
+            "name": "another-service-route-grpcroute-http-9001-istio-ingress-k8s",
+            "listener_port": 9001,
+            "listener_protocol": "HTTP",
+            "namespace": "other-namespace",
+            "source_app": "another-app",
+            "source_relation": "istio-ingress-route",
+            "matches": [
+                GRPCRouteMatch(
+                    method=GRPCMethodMatch(service="another.Service", method="Method")
+                )
+            ],
+            "backend_refs": [
+                BackendRef(name="another-service", port=9001, namespace="other-namespace")
+            ],
+            "filters": [],
+        },
+    ]
+
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(leader=True),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        destination_rules = charm._construct_grpc_destination_rules(grpc_routes)
+
+        # Should create 2 DestinationRules (tester-grpc deduplicated, another-service)
+        assert len(destination_rules) == 2
+
+        # Find the tester-grpc DestinationRule
+        tester_grpc_dr = next(
+            dr for dr in destination_rules
+            if dr.metadata.name == "tester-grpc-grpc-dest-rule-istio-ingress-k8s"
+        )
+
+        # Verify tester-grpc DestinationRule
+        assert tester_grpc_dr.metadata.namespace == "test-namespace"
+        assert tester_grpc_dr.spec["host"] == "tester-grpc.test-namespace.svc.cluster.local"
+        assert tester_grpc_dr.spec["trafficPolicy"]["connectionPool"]["http"]["useClientProtocol"] is True
+
+        # Find the another-service DestinationRule
+        another_service_dr = next(
+            dr for dr in destination_rules
+            if dr.metadata.name == "another-service-grpc-dest-rule-istio-ingress-k8s"
+        )
+
+        # Verify another-service DestinationRule
+        assert another_service_dr.metadata.namespace == "other-namespace"
+        assert another_service_dr.spec["host"] == "another-service.other-namespace.svc.cluster.local"
+        assert another_service_dr.spec["trafficPolicy"]["connectionPool"]["http"]["useClientProtocol"] is True

@@ -79,17 +79,17 @@ class ParentRef(BaseModel):
     sectionName: str
 
 
-class PathMatch(BaseModel):
-    """PathMatch defines the type and value of path matching."""
+class HTTPPathMatch(BaseModel):
+    """HTTPPathMatch defines the type and value of path matching."""
 
     type: str = "PathPrefix"
     value: str
 
 
-class Match(BaseModel):
-    """Match defines the path matching configuration."""
+class HTTPRouteMatch(BaseModel):
+    """HTTPRouteMatch defines the path matching configuration."""
 
-    path: PathMatch
+    path: HTTPPathMatch
 
 
 class PrefixPathConfig(BaseModel):
@@ -143,10 +143,10 @@ class BackendRef(BaseModel):
     namespace: str
 
 
-class Rule(BaseModel):
-    """Rule defines the routing rule configuration."""
+class HTTPRouteRule(BaseModel):
+    """HTTPRouteRule defines the routing rule configuration."""
 
-    matches: List[Match]
+    matches: List[HTTPRouteMatch]
     backendRefs: Optional[List[BackendRef]] = []  # noqa: N815
     filters: Optional[List[HTTPRouteFilter]] = []
 
@@ -155,7 +155,7 @@ class HTTPRouteResourceSpec(BaseModel):
     """HTTPRouteResourceSpec defines the specification of an HTTPRoute Kubernetes resource."""
 
     parentRefs: List[ParentRef]  # noqa: N815
-    rules: List[Rule]
+    rules: List[HTTPRouteRule]
 
     # TODO: uncomment the below when support is added for both wildcards and using subdomains
     # hostnames: Optional[List[str]] = []
@@ -166,6 +166,42 @@ class HTTPRouteResource(BaseModel):
 
     metadata: Metadata
     spec: HTTPRouteResourceSpec
+
+
+# GRPCRoute schema
+class GRPCMethodMatch(BaseModel):
+    """GRPCMethodMatch defines the gRPC method matching configuration."""
+
+    service: Optional[str] = None
+    method: Optional[str] = None
+
+
+class GRPCRouteMatch(BaseModel):
+    """GRPCRouteMatch defines the matching configuration for gRPC routes."""
+
+    method: Optional[GRPCMethodMatch] = None
+
+
+class GRPCRouteRule(BaseModel):
+    """GRPCRouteRule defines the routing rule configuration for gRPC routes."""
+
+    matches: Optional[List[GRPCRouteMatch]] = None
+    backendRefs: Optional[List[BackendRef]] = []  # noqa: N815
+    filters: Optional[List[HTTPRouteFilter]] = []  # gRPC can use HTTP filters
+
+
+class GRPCRouteResourceSpec(BaseModel):
+    """GRPCRouteResourceSpec defines the specification of a GRPCRoute Kubernetes resource."""
+
+    parentRefs: List[ParentRef]  # noqa: N815
+    rules: List[GRPCRouteRule]
+
+
+class GRPCRouteResource(BaseModel):
+    """GRPCRouteResource defines the structure of a GRPCRoute Kubernetes resource."""
+
+    metadata: Metadata
+    spec: GRPCRouteResourceSpec
 
 
 # Authrization Policy schema

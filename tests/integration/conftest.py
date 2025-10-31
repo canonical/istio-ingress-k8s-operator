@@ -72,8 +72,9 @@ async def istio_ingress_charm(ops_test: OpsTest) -> Path:
 
 @pytest.fixture(scope="module")
 @timed_memoizer
-async def ipa_tester_charm(ops_test: OpsTest):
-    charm_path = (Path(__file__).parent / "testers" / "ipa").absolute()
+async def tester_http_charm(ops_test: OpsTest):
+    """HTTP tester charm used for integration testing (IPA + istio-ingress-route)."""
+    charm_path = (Path(__file__).parent / "testers" / "tester-http").absolute()
 
     # Update libraries in the tester charms
     root_lib_folder = Path(__file__).parent.parent.parent / "lib"
@@ -85,6 +86,24 @@ async def ipa_tester_charm(ops_test: OpsTest):
 
     charm = await ops_test.build_charm(charm_path, verbosity="debug")
     return charm
+
+@pytest.fixture(scope="module")
+@timed_memoizer
+async def tester_grpc_charm(ops_test: OpsTest):
+    """GRPC tester charm used for integration testing (istio-ingress-route)."""
+    charm_path = (Path(__file__).parent / "testers" / "tester-grpc").absolute()
+
+    # Update libraries in the tester charms
+    root_lib_folder = Path(__file__).parent.parent.parent / "lib"
+    tester_lib_folder = charm_path / "lib"
+
+    if os.path.exists(tester_lib_folder):
+        shutil.rmtree(tester_lib_folder)
+    shutil.copytree(root_lib_folder, tester_lib_folder)
+
+    charm = await ops_test.build_charm(charm_path, verbosity="debug")
+    return charm
+
 
 @dataclass
 class UnitRelationData:

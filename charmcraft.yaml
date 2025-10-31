@@ -82,6 +82,19 @@ provides:
     description: |
       Provides an interface for exchanging Istio ingress configuration,
       including external authorizer configuration details.
+  istio-ingress-route:
+    interface: istio_ingress_route
+    description: |
+      Provides advanced ingress routing with support for multiple ports and protocols
+      (HTTP, gRPC) using typed configuration models. Requirers can define custom
+      Gateway listeners and routes. If the ingress has authentication configured,
+      all routes will have authentication applied to them.
+  istio-ingress-route-unauthenticated:
+    interface: istio_ingress_route
+    description: |
+      Provides advanced ingress routing similar to istio-ingress-route, but routes
+      will never have authentication applied to them, even if the ingress has
+      authentication configured.
 
 requires:
   certificates:
