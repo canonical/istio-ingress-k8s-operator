@@ -8,6 +8,9 @@ from typing import Dict, List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import GRPCRouteFilter, HTTPRouteFilter
+
+# TODO: Deduplicate and consolidate the mix-n-match of models between here and istio_ingress_route lib. See https://github.com/canonical/istio-ingress-k8s-operator/issues/117.
 
 # Global metadata schema
 class Metadata(BaseModel):
@@ -92,49 +95,6 @@ class HTTPRouteMatch(BaseModel):
     path: HTTPPathMatch
 
 
-class PrefixPathConfig(BaseModel):
-    """PrefixPathConfig defines the configuration for prefix-based path matching."""
-
-    type: str = "ReplacePrefixMatch"
-    replacePrefixMatch: str = "/"  # noqa: N815
-
-
-class HTTPRouteFilterType(str, Enum):
-    """HTTPRouteFilterType defines the type of HTTP filter."""
-
-    ExtensionRef = "ExtensionRef"
-    RequestHeaderModifier = "RequestHeaderModifier"
-    RequestMirror = "RequestMirror"
-    RequestRedirect = "RequestRedirect"
-    ResponseHeaderModifier = "ResponseHeaderModifier"
-    URLRewrite = "URLRewrite"
-
-
-class HTTPURLRewriteFilter(BaseModel):
-    """URLRewriteConfig defines the configuration for URL rewriting."""
-
-    path: PrefixPathConfig = PrefixPathConfig()
-
-
-class HTTPRequestRedirectFilter(BaseModel):
-    """HTTPRequestRedirectConfig defines the configuration for request redirection."""
-
-    scheme: str
-    statusCode: int
-    # Not implemented
-    # hostname
-    # path
-    # port
-
-
-class HTTPRouteFilter(BaseModel):
-    """HTTPRouteFilter defines the HTTP filter configuration."""
-
-    type: HTTPRouteFilterType
-    requestRedirect: Optional[HTTPRequestRedirectFilter] = None
-    urlRewrite: Optional[HTTPURLRewriteFilter] = None
-
-
 class BackendRef(BaseModel):
     """BackendRef specifies the backend service reference that traffic will be routed to."""
 
@@ -187,7 +147,7 @@ class GRPCRouteRule(BaseModel):
 
     matches: Optional[List[GRPCRouteMatch]] = None
     backendRefs: Optional[List[BackendRef]] = []  # noqa: N815
-    filters: Optional[List[HTTPRouteFilter]] = []  # gRPC can use HTTP filters
+    filters: Optional[List[GRPCRouteFilter]] = []
 
 
 class GRPCRouteResourceSpec(BaseModel):

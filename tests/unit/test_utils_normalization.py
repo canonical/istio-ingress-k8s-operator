@@ -7,6 +7,7 @@ from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
     BackendRef as LibBackendRef,
 )
 from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
+    FilterType,
     GRPCMethodMatch,
     IstioIngressRouteConfig,
     Listener,
@@ -27,7 +28,6 @@ from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
 from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
     HTTPRouteMatch as LibHTTPRouteMatch,
 )
-from models import HTTPRouteFilterType
 from utils import (
     deduplicate_listeners,
     get_unauthenticated_paths,
@@ -222,7 +222,7 @@ def test_normalize_ipa_routes_with_strip_prefix():
     assert route["listener_port"] == 80
     assert route["listener_protocol"] == "HTTP"
     assert len(route["filters"]) == 1
-    assert route["filters"][0].type == HTTPRouteFilterType.URLRewrite
+    assert route["filters"][0].type == FilterType.URLRewrite
 
 
 def test_normalize_ipa_routes_with_tls_creates_redirect():
@@ -255,7 +255,7 @@ def test_normalize_ipa_routes_with_tls_creates_redirect():
     assert redirect_route["listener_protocol"] == "HTTP"
     assert len(redirect_route["backend_refs"]) == 0  # No backends for redirect
     assert len(redirect_route["filters"]) == 1
-    assert redirect_route["filters"][0].type == HTTPRouteFilterType.RequestRedirect
+    assert redirect_route["filters"][0].type == FilterType.RequestRedirect
     assert redirect_route["filters"][0].requestRedirect.scheme == "https"
     assert redirect_route["filters"][0].requestRedirect.statusCode == 301
 
@@ -269,7 +269,7 @@ def test_normalize_ipa_routes_with_tls_creates_redirect():
     assert https_route["backend_refs"][0].port == 8080
     # Should have URLRewrite filter because strip_prefix=True
     assert len(https_route["filters"]) == 1
-    assert https_route["filters"][0].type == HTTPRouteFilterType.URLRewrite
+    assert https_route["filters"][0].type == FilterType.URLRewrite
 
 
 def test_normalize_istio_ingress_route_http_and_grpc_routes():
