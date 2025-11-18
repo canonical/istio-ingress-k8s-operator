@@ -418,10 +418,11 @@ class FilterType(str, Enum):
 
     URLRewrite = "URLRewrite"
     RequestRedirect = "RequestRedirect"
-    RequestHeaderModifier = "RequestHeaderModifier"
-    ResponseHeaderModifier = "ResponseHeaderModifier"
-    RequestMirror = "RequestMirror"
-    # NOTE: the following types are experimental in K8s Gateway API v1.4 and hence left out for now.
+    # TODO: Extend support to other filters. See https://github.com/canonical/istio-ingress-k8s-operator/issues/119.
+    # RequestHeaderModifier = "RequestHeaderModifier"
+    # ResponseHeaderModifier = "ResponseHeaderModifier"
+    # RequestMirror = "RequestMirror"
+    # NOTE: the following types are experimental in K8s Gateway API v1.4.
     # CORS = "CORS"
     # ExternalAuth = "ExternalAuth"
     # ExtensionRef = "ExtensionRef"
