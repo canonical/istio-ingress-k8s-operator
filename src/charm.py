@@ -566,61 +566,6 @@ class IstioIngressCharm(CharmBase):
             spec=gateway.spec.model_dump(exclude_none=True),
         )
 
-    # def _construct_httproute(
-    #     self,
-    #     service_name: str,
-    #     namespace: str,
-    #     port: int,
-    #     strip_prefix: bool,
-    #     prefix: str,
-    #     section_name: str,
-    # ):
-    #     http_route = HTTPRouteResource(
-    #         metadata=Metadata(
-    #             name=service_name + "-" + section_name + "-" + self.app.name,
-    #             namespace=namespace,
-    #         ),
-    #         spec=HTTPRouteResourceSpec(
-    #             parentRefs=[
-    #                 ParentRef(
-    #                     name=self.app.name,
-    #                     namespace=self.model.name,
-    #                     sectionName=section_name,
-    #                 )
-    #             ],
-    #             rules=[
-    #                 HTTPRouteRule(
-    #                     matches=[HTTPRouteMatch(path=HTTPPathMatch(value=prefix))],
-    #                     backendRefs=[
-    #                         BackendRef(
-    #                             name=service_name,
-    #                             port=port,
-    #                             namespace=namespace,
-    #                         )
-    #                     ],
-    #                     filters=(
-    #                         [
-    #                             HTTPRouteFilter(
-    #                                 type=HTTPRouteFilterType.URLRewrite,
-    #                                 urlRewrite=HTTPURLRewriteFilter(),
-    #                             )
-    #                         ]
-    #                         if strip_prefix
-    #                         else []
-    #                     ),
-    #                 )
-    #             ],
-    #             # TODO: uncomment the below when support is added for both wildcards and using subdomains
-    #             # hostnames=[udata.host for udata in data.units],
-    #         ),
-    #     )
-    #     http_resource = RESOURCE_TYPES["HTTPRoute"]
-    #     return http_resource(
-    #         metadata=ObjectMeta.from_dict(http_route.metadata.model_dump()),
-    #         # Export without unset and None because None means nil in Kubernetes, which is not what we want.
-    #         spec=http_route.spec.model_dump(exclude_none=True),
-    #     )
-
     def _construct_auth_policy_from_ingress_to_target(
         self, target_name: str, target_namespace: str, target_port: int
     ):
