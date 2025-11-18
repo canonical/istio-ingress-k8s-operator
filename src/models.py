@@ -6,9 +6,8 @@
 from enum import Enum
 from typing import Dict, List, Optional
 
+from charms.istio_ingress_k8s.v0.istio_ingress_route import GRPCRouteFilter, HTTPRouteFilter
 from pydantic import BaseModel, ConfigDict, Field, model_validator
-
-from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import GRPCRouteFilter, HTTPRouteFilter
 
 # TODO: Deduplicate and consolidate the mix-n-match of models between here and istio_ingress_route lib. See https://github.com/canonical/istio-ingress-k8s-operator/issues/117.
 

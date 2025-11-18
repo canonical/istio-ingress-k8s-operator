@@ -5,13 +5,13 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 import scenario
-from ops import ActiveStatus
-
-from charm import IstioIngressCharm
-from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     RequestRedirectFilter,
     RequestRedirectSpec,
 )
+from ops import ActiveStatus
+
+from charm import IstioIngressCharm
 from models import (
     BackendRef,
     HTTPPathMatch,

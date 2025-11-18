@@ -380,6 +380,24 @@ class PathModifier(BaseModel):
         description="Replacement value for the path"
     )
 
+    @model_validator(mode='before')
+    @classmethod
+    def validate_path_modifier(cls, data):
+        """Handle deserialization from K8s Gateway API format."""
+        if isinstance(data, dict):
+            # Handle K8s Gateway API format with replacePrefixMatch or replaceFullPath
+            if 'replacePrefixMatch' in data:
+                return {
+                    'type': data.get('type', PathModifierType.ReplacePrefixMatch),
+                    'value': data['replacePrefixMatch']
+                }
+            elif 'replaceFullPath' in data:
+                return {
+                    'type': data.get('type', PathModifierType.ReplaceFullPath),
+                    'value': data['replaceFullPath']
+                }
+        return data
+
     @model_serializer
     def serialize_model(self) -> Optional[dict]:
         """Serialize with correct field name for K8s Gateway API."""

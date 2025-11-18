@@ -11,8 +11,10 @@ import yaml
 from helpers import (
     get_ca_certificate,
     get_grpc_route_condition,
+    get_http_response,
     get_k8s_service_address,
     get_route_condition,
+    get_route_spec,
     istio_k8s,
     send_grpc_request,
     send_grpc_request_with_tls,
@@ -129,8 +131,8 @@ async def test_http_routes_validity(ops_test: OpsTest):
     assert listener_condition is not None, "Listener http-8080 not found in Gateway status"
     assert listener_spec is not None, "Listener http-8080 not found in Gateway spec"
 
-    # Should have 2 HTTP routes attached (api-route and health-route from tester-http)
-    assert listener_condition["attachedRoutes"] == 2
+    # Should have 3 HTTP routes attached (api-route, health-route, and rewrite-route from tester-http)
+    assert listener_condition["attachedRoutes"] == 3
     assert listener_condition["conditions"][0]["message"] == "No errors found"
     assert listener_condition["conditions"][0]["reason"] == "Accepted"
     assert listener_spec["port"] == 8080
@@ -149,6 +151,12 @@ async def test_http_routes_validity(ops_test: OpsTest):
     assert health_route_condition["conditions"][0]["message"] == "Route was valid"
     assert health_route_condition["conditions"][0]["reason"] == "Accepted"
 
+    # Test rewrite-route
+    rewrite_route_name = f"{TESTER_HTTP}-rewrite-route-httproute-http-8080-{APP_NAME}"
+    rewrite_route_condition = await get_route_condition(ops_test, rewrite_route_name)
+    assert rewrite_route_condition["conditions"][0]["message"] == "Route was valid"
+    assert rewrite_route_condition["conditions"][0]["reason"] == "Accepted"
+
 
 @pytest.mark.abort_on_fail
 async def test_http_routes_connectivity(ops_test: OpsTest):
@@ -162,6 +170,39 @@ async def test_http_routes_connectivity(ops_test: OpsTest):
     # Test /health endpoint
     health_url = f"http://{istio_ingress_address}:8080/health"
     assert send_http_request(health_url), f"Failed to reach {health_url}"
+
+
+@pytest.mark.abort_on_fail
+async def test_http_route_urlrewrite_filter(ops_test: OpsTest):
+    """Test that URLRewrite filter correctly rewrites request paths."""
+    route_name = f"{TESTER_HTTP}-rewrite-route-httproute-http-8080-{APP_NAME}"
+    route_spec = await get_route_spec(ops_test, route_name)
+
+    # Verify filter exists and is configured correctly
+    assert route_spec is not None, f"HTTPRoute {route_name} not found"
+    assert "rules" in route_spec and len(route_spec["rules"]) > 0
+
+    rule = route_spec["rules"][0]
+    assert rule.get("filters") and len(rule["filters"]) == 1
+
+    filter_spec = rule["filters"][0]
+    assert filter_spec["type"] == "URLRewrite"
+    assert filter_spec["urlRewrite"]["path"]["type"] == "ReplacePrefixMatch"
+    assert filter_spec["urlRewrite"]["path"]["replacePrefixMatch"] == "/api"
+
+    # Test end-to-end: verify echo server receives rewritten path
+    istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
+    response = get_http_response(f"http://{istio_ingress_address}:8080/old-api/test")
+
+    assert response.status_code == 200, \
+        f"Request failed with status {response.status_code}: {response.text}"
+
+    # Echo server returns plain text with request details
+    # Second line contains the method and path, e.g., "GET /api/test HTTP/1.1"
+    lines = response.text.strip().split('\n')
+    request_line = lines[2] if len(lines) > 2 else ""
+    assert "/api/test" in request_line, \
+        f"Expected rewritten path '/api/test' in request line, got: {request_line}"
 
 
 @pytest.mark.abort_on_fail
@@ -274,7 +315,7 @@ async def test_tls_http_routes_validity(ops_test: OpsTest):
 
     assert https_8080_listener_condition is not None, "Listener https-8080 not found in Gateway status"
     assert https_8080_listener_spec is not None, "Listener https-8080 not found in Gateway spec"
-    assert https_8080_listener_condition["attachedRoutes"] == 2, "Expected 2 HTTP routes attached to https-8080"
+    assert https_8080_listener_condition["attachedRoutes"] == 3, "Expected 3 HTTP routes attached to https-8080"
     assert https_8080_listener_spec["port"] == 8080
     assert https_8080_listener_spec["protocol"] == "HTTPS"
 
@@ -288,6 +329,11 @@ async def test_tls_http_routes_validity(ops_test: OpsTest):
     health_route_condition = await get_route_condition(ops_test, health_route_name)
     assert health_route_condition["conditions"][0]["message"] == "Route was valid"
     assert health_route_condition["conditions"][0]["reason"] == "Accepted"
+
+    rewrite_route_name = f"{TESTER_HTTP}-rewrite-route-httproute-https-8080-{APP_NAME}"
+    rewrite_route_condition = await get_route_condition(ops_test, rewrite_route_name)
+    assert rewrite_route_condition["conditions"][0]["message"] == "Route was valid"
+    assert rewrite_route_condition["conditions"][0]["reason"] == "Accepted"
 
 
 @pytest.mark.abort_on_fail

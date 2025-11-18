@@ -10,7 +10,11 @@ from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     IstioIngressRouteConfig,
     IstioIngressRouteRequirer,
     Listener,
+    PathModifier,
+    PathModifierType,
     ProtocolType,
+    URLRewriteFilter,
+    URLRewriteSpec,
 )
 from charms.traefik_k8s.v2.ingress import IngressPerAppRequirer
 from ops.charm import CharmBase
@@ -102,6 +106,27 @@ class HTTPTesterCharm(CharmBase):
                         )
                     ],
                     backends=[BackendRef(service=self.app.name, port=8080)],
+                ),
+                # Route 3: /old-api path with URLRewrite filter
+                HTTPRoute(
+                    name="rewrite-route",
+                    listener=http_listener,
+                    matches=[
+                        HTTPRouteMatch(
+                            path=HTTPPathMatch(type=HTTPPathMatchType.PathPrefix, value="/old-api")
+                        )
+                    ],
+                    backends=[BackendRef(service=self.app.name, port=8080)],
+                    filters=[
+                        URLRewriteFilter(
+                            urlRewrite=URLRewriteSpec(
+                                path=PathModifier(
+                                    type=PathModifierType.ReplacePrefixMatch,
+                                    value="/api"
+                                )
+                            )
+                        )
+                    ],
                 ),
             ],
         )

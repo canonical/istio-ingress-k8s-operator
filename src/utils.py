@@ -13,10 +13,7 @@ import logging
 from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple, TypedDict
 
-from charms.istio_ingress_k8s.v0.istio_ingress_route import to_gateway_protocol
-from ops import EventBase
-
-from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     GRPCRouteFilter,
     HTTPRouteFilter,
     PathModifier,
@@ -25,7 +22,10 @@ from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
     RequestRedirectSpec,
     URLRewriteFilter,
     URLRewriteSpec,
+    to_gateway_protocol,
 )
+from ops import EventBase
+
 from models import (
     BackendRef,
     GRPCMethodMatch,

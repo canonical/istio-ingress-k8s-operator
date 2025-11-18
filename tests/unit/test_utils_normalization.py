@@ -3,31 +3,32 @@
 
 """Tests for utils.py normalization functions."""
 
-from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     BackendRef as LibBackendRef,
 )
-from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     FilterType,
     GRPCMethodMatch,
     IstioIngressRouteConfig,
     Listener,
     ProtocolType,
 )
-from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     GRPCRoute as LibGRPCRoute,
 )
-from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     GRPCRouteMatch as LibGRPCRouteMatch,
 )
-from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     HTTPPathMatch as LibHTTPPathMatch,
 )
-from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     HTTPRoute as LibHTTPRoute,
 )
-from lib.charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     HTTPRouteMatch as LibHTTPRouteMatch,
 )
+
 from utils import (
     deduplicate_listeners,
     get_unauthenticated_paths,
