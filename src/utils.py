@@ -13,7 +13,17 @@ import logging
 from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple, TypedDict
 
-from charms.istio_ingress_k8s.v0.istio_ingress_route import to_gateway_protocol
+from charms.istio_ingress_k8s.v0.istio_ingress_route import (
+    GRPCRouteFilter,
+    HTTPRouteFilter,
+    PathModifier,
+    PathModifierType,
+    RequestRedirectFilter,
+    RequestRedirectSpec,
+    URLRewriteFilter,
+    URLRewriteSpec,
+    to_gateway_protocol,
+)
 from ops import EventBase
 
 from models import (
@@ -21,11 +31,7 @@ from models import (
     GRPCMethodMatch,
     GRPCRouteMatch,
     HTTPPathMatch,
-    HTTPRequestRedirectFilter,
-    HTTPRouteFilter,
-    HTTPRouteFilterType,
     HTTPRouteMatch,
-    HTTPURLRewriteFilter,
 )
 
 logger = logging.getLogger(__name__)
@@ -112,7 +118,7 @@ class GRPCRoute(TypedDict):
     source_relation: str
     matches: List[GRPCRouteMatch]
     backend_refs: List[BackendRef]
-    filters: List[HTTPRouteFilter]
+    filters: List[GRPCRouteFilter]
 
 
 # ============================================================================
@@ -212,6 +218,13 @@ def _create_http_redirect_route(
     section_name = "http-80"
     route_name = f"{service_name}-httproute-{section_name}-{ingress_app_name}"
 
+    filters: List[HTTPRouteFilter] = []
+    filters.append(
+        RequestRedirectFilter(
+            requestRedirect=RequestRedirectSpec(scheme="https", statusCode=301)
+        )  # https redirection without port spec will always redirect to the standard 443 port.
+    )
+
     return HTTPRoute(
         name=route_name,
         listener_port=80,
@@ -225,12 +238,7 @@ def _create_http_redirect_route(
             )
         ],
         backend_refs=[],  # No backends for redirect routes
-        filters=[
-            HTTPRouteFilter(
-                type=HTTPRouteFilterType.RequestRedirect,
-                requestRedirect=HTTPRequestRedirectFilter(scheme="https", statusCode=301),  # https redirection without port spec will always redirect to the standard 443 port.
-            )
-        ],
+        filters=filters,
     )
 
 
@@ -269,12 +277,16 @@ def normalize_ipa_routes(
             ]
 
             # Build filters for URLRewrite if needed
-            filters = []
+            filters: List[HTTPRouteFilter] = []
             if route["strip_prefix"]:
                 filters.append(
-                    HTTPRouteFilter(
-                        type=HTTPRouteFilterType.URLRewrite,
-                        urlRewrite=HTTPURLRewriteFilter(),
+                    URLRewriteFilter(
+                        urlRewrite=URLRewriteSpec(
+                            path=PathModifier(
+                                type=PathModifierType.ReplacePrefixMatch,
+                                value="/"
+                            )
+                        )
                     )
                 )
 
@@ -381,8 +393,8 @@ def normalize_istio_ingress_route_http_routes(
                     )
                 )
 
-            # istio-ingress-route routes don't use filters (for now)
-            filters = []
+            # Library filters are directly compatible - no conversion needed!
+            filters = list(http_route.filters) if http_route.filters else []
 
             # Derive route name
             # Format: {app_name}-{http_route.name}-httproute-{section_name}-{ingress_app_name}
@@ -460,8 +472,10 @@ def normalize_istio_ingress_route_grpc_routes(
                     )
                 )
 
-            # gRPC routes don't use filters (for now)
+            # GRPCRouteFilter not yet implemented - leave empty for now
             filters = []
+            # TODO: When GRPCRouteFilter is implemented, use:
+            # filters = list(grpc_route.filters) if grpc_route.filters else []
 
             # Derive route name
             # Format: {app_name}-{grpc_route.name}-grpcroute-{section_name}-{ingress_app_name}

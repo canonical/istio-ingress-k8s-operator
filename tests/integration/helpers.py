@@ -262,6 +262,16 @@ def send_http_request(url: str, headers: Optional[dict] = None) -> bool:
     return resp.status_code == 200
 
 
+def get_http_response(url: str, headers: Optional[dict] = None):
+    """Sends an HTTP GET request and returns the response object.
+
+    :param url: The URL to send the request to.
+    :param headers: Optional headers to include in the request (e.g., {"Host": "example.com"}).
+    :return: The requests.Response object.
+    """
+    return requests.get(url=url, headers=headers)
+
+
 def send_http_request_with_custom_ca(
     url: str, ca_cert: str, resolve_netloc_to_ip: str = None
 ) -> int:

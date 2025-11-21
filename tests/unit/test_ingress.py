@@ -5,15 +5,16 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 import scenario
+from charms.istio_ingress_k8s.v0.istio_ingress_route import (
+    RequestRedirectFilter,
+    RequestRedirectSpec,
+)
 from ops import ActiveStatus
 
 from charm import IstioIngressCharm
 from models import (
     BackendRef,
     HTTPPathMatch,
-    HTTPRequestRedirectFilter,
-    HTTPRouteFilter,
-    HTTPRouteFilterType,
     HTTPRouteMatch,
 )
 from tests.unit.test_gateway import generate_certificates_relation
@@ -41,9 +42,8 @@ def create_test_http_routes(routes_info, with_tls=False):
                     ],
                     backend_refs=[],  # Redirects don't have backends
                     filters=[
-                        HTTPRouteFilter(
-                            type=HTTPRouteFilterType.RequestRedirect,
-                            requestRedirect=HTTPRequestRedirectFilter(scheme="https", statusCode=301),
+                        RequestRedirectFilter(
+                            requestRedirect=RequestRedirectSpec(scheme="https", statusCode=301)
                         )
                     ],
                 )
