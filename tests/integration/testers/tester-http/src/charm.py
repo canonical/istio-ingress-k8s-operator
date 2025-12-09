@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # Copyright 2022 Canonical Ltd.
 # See LICENSE file for licensing details.
+from charmed_service_mesh_helpers.interfaces import GatewayMetadataRequirer
 from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     BackendRef,
     HTTPPathMatch,
@@ -36,6 +37,11 @@ class HTTPTesterCharm(CharmBase):
         # istio-ingress-route interface support
         self.istio_ingress_route = IstioIngressRouteRequirer(
             self, relation_name="istio-ingress-route"
+        )
+
+        # gateway-metadata interface support
+        self.gateway_metadata = GatewayMetadataRequirer(
+            self, relation_name="gateway-metadata"
         )
 
         self.framework.observe(self.on.echo_server_pebble_ready, self._on_pebble_ready)

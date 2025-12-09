@@ -19,6 +19,7 @@ from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.tempo_coordinator_k8s.v0.charm_tracing import trace_charm
 from charms.tempo_coordinator_k8s.v0.tracing import TracingEndpointRequirer
 from charms.traefik_k8s.v2.ingress import IngressPerAppProvider as IPAv2
+from charmed_service_mesh_helpers.interfaces import GatewayMetadata, GatewayMetadataProvider
 from lightkube.core.client import Client
 from lightkube.core.exceptions import ApiError
 from lightkube.generic_resource import create_namespaced_resource
@@ -203,6 +204,10 @@ class IstioIngressCharm(CharmBase):
         self.forward_auth = ForwardAuthRequirer(self)
         self.ingress_config = IngressConfigProvider(
             relation_mapping=self.model.relations, app=self.app
+        )
+        self.gateway_metadata_provider = GatewayMetadataProvider(
+            self,
+            relation_name="gateway-metadata",
         )
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.start, self._on_start)
@@ -795,6 +800,9 @@ class IstioIngressCharm(CharmBase):
 
         self.unit.status = ActiveStatus(f"Serving at {self._ingress_url}")
 
+        # Publish gateway metadata to related charms
+        self._publish_gateway_metadata()
+
         # Request certificate inspection.
         # Request a cert refresh in case configuration has changed
         # The cert handler will only refresh if it detects a meaningful change
@@ -1336,6 +1344,16 @@ class IstioIngressCharm(CharmBase):
     def _certificate_secret_name(self) -> str:
         """Return the name of the Kubernetes secret used to hold TLS certificate information."""
         return f"{self.app.name}-tls-certificate"
+
+    def _publish_gateway_metadata(self):
+        """Publish Gateway workload metadata to related charms."""
+        metadata = GatewayMetadata(
+            namespace=self.model.name,
+            gateway_name=self.app.name,
+            deployment_name=self.managed_name,
+            service_account=self.managed_name,
+        )
+        self.gateway_metadata_provider.publish_metadata(metadata)
 
     @staticmethod
     def format_labels(label_dict: Dict[str, str]) -> str:

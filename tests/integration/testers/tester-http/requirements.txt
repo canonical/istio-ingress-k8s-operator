@@ -1,1 +1,2 @@
 ops
+charmed-service-mesh-helpers @ git+https://github.com/canonical/charmed-service-mesh-helpers.git@feat/SMS-578-adds-gateway-metadata-lib
