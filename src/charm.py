@@ -11,6 +11,7 @@ import time
 from typing import Dict, List, Optional, cast
 from urllib.parse import urlparse
 
+from charmed_service_mesh_helpers.interfaces import GatewayMetadata, GatewayMetadataProvider
 from charms.istio_ingress_k8s.v0.istio_ingress_route import IstioIngressRouteProvider
 from charms.istio_k8s.v0.istio_ingress_config import IngressConfigProvider
 from charms.oauth2_proxy_k8s.v0.forward_auth import ForwardAuthRequirer, ForwardAuthRequirerConfig
@@ -19,7 +20,6 @@ from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.tempo_coordinator_k8s.v0.charm_tracing import trace_charm
 from charms.tempo_coordinator_k8s.v0.tracing import TracingEndpointRequirer
 from charms.traefik_k8s.v2.ingress import IngressPerAppProvider as IPAv2
-from charmed_service_mesh_helpers.interfaces import GatewayMetadata, GatewayMetadataProvider
 from lightkube.core.client import Client
 from lightkube.core.exceptions import ApiError
 from lightkube.generic_resource import create_namespaced_resource
