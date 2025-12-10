@@ -238,6 +238,9 @@ class IstioIngressCharm(CharmBase):
         self.framework.observe(self.on.leader_elected, self._handle_ingress_config)
         self.framework.observe(self.on[PEERS_RELATION].relation_changed, self._on_peers_changed)
         self.framework.observe(self.on[PEERS_RELATION].relation_departed, self._on_peers_changed)
+        self.framework.observe(
+            self.on["gateway-metadata"].relation_changed, self._on_gateway_metadata_relation_changed
+        )
 
         # During the initialisation of the charm, we do not have a LoadBalancer and thus a LoadBalancer external IP.
         # If we need that IP to request the certs, disable cert handling until we have it.
@@ -376,6 +379,10 @@ class IstioIngressCharm(CharmBase):
 
     def _on_peers_changed(self, _):
         """Event handler for whenever peer topology changes."""
+        self._sync_all_resources()
+
+    def _on_gateway_metadata_relation_changed(self, _):
+        """Event handler for gateway-metadata relation events."""
         self._sync_all_resources()
 
     def _on_remove(self, _):

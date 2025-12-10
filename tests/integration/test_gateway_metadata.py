@@ -3,12 +3,12 @@
 
 import json
 import logging
-import subprocess
 from dataclasses import asdict
 from pathlib import Path
 
 import pytest
 import yaml
+from conftest import get_unit_info
 from helpers import istio_k8s
 from pytest_operator.plugin import OpsTest
 
@@ -61,13 +61,13 @@ async def test_relate_gateway_metadata(ops_test: OpsTest):
 @pytest.mark.abort_on_fail
 async def test_gateway_metadata_content(ops_test: OpsTest):
     """Validate that gateway metadata is correctly published."""
-    # Get the relation data
-    cmd = f"juju show-unit {APP_NAME}/0 --format json"
-    result = subprocess.run(cmd.split(), capture_output=True, text=True, check=True)
-    unit_data = json.loads(result.stdout)
+    # Get the relation data from the requirer side (tester-http)
+    # Note: We query from the requirer side because juju show-unit doesn't show
+    # the provider's own application-data when querying the provider unit
+    unit_info = get_unit_info(f"{TESTER_HTTP}/0", ops_test.model_full_name)
 
     # Find the gateway-metadata relation
-    relations = unit_data[f"{APP_NAME}/0"]["relation-info"]
+    relations = unit_info["relation-info"]
     gateway_metadata_relation = None
     for relation in relations:
         if relation["endpoint"] == "gateway-metadata":
