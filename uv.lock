@@ -473,12 +473,16 @@ wheels = [
 
 [[package]]
 name = "charmed-service-mesh-helpers"
-version = "999.999.999"
-source = { git = "https://github.com/canonical/charmed-service-mesh-helpers.git?rev=feat%2FSMS-578-adds-gateway-metadata-lib#4cc1213a4da0366c7d7b086cce319cb5485d73e2" }
+version = "0.3.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ops" },
     { name = "pydantic", version = "2.10.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/eb/d4/4b31e3e4f1205b95f6fdac4b5bebfdf2b6a5bd95f9ba917ea6bced672d2b/charmed_service_mesh_helpers-0.3.0.tar.gz", hash = "sha256:888c24a7648ac723edc4894e81efc90317a22f0f66da2e0ea301c583232e429d", size = 16695, upload-time = "2025-12-16T15:49:46.235Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/98/a5/6fc15f217753f868b3bca3bcaa6b3a1c4a6f354bd01eec34c3d1a7cf9a2c/charmed_service_mesh_helpers-0.3.0-py3-none-any.whl", hash = "sha256:39caa6e170c399794024c79c3490236ed1890a5b1984842f99eee1260b975d89", size = 16321, upload-time = "2025-12-16T15:49:45.35Z" },
 ]
 
 [[package]]
@@ -1014,7 +1018,7 @@ version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions", version = "4.13.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
-    { name = "typing-extensions", version = "4.15.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9' and python_full_version < '3.13'" },
+    { name = "typing-extensions", version = "4.15.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9' and python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -1660,7 +1664,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "charmed-service-mesh-helpers", git = "https://github.com/canonical/charmed-service-mesh-helpers.git?rev=feat%2FSMS-578-adds-gateway-metadata-lib" },
+    { name = "charmed-service-mesh-helpers" },
     { name = "cosl" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'" },
     { name = "cryptography", specifier = "~=42.0.0" },
