@@ -11,6 +11,7 @@ import time
 from typing import Dict, List, Optional, cast
 from urllib.parse import urlparse
 
+from charmed_service_mesh_helpers.interfaces import GatewayMetadata, GatewayMetadataProvider
 from charms.istio_ingress_k8s.v0.istio_ingress_route import IstioIngressRouteProvider
 from charms.istio_k8s.v0.istio_ingress_config import IngressConfigProvider
 from charms.oauth2_proxy_k8s.v0.forward_auth import ForwardAuthRequirer, ForwardAuthRequirerConfig
@@ -204,6 +205,10 @@ class IstioIngressCharm(CharmBase):
         self.ingress_config = IngressConfigProvider(
             relation_mapping=self.model.relations, app=self.app
         )
+        self.gateway_metadata_provider = GatewayMetadataProvider(
+            self,
+            relation_name="gateway-metadata",
+        )
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.start, self._on_start)
         self.framework.observe(self.forward_auth.on.auth_config_changed, self._handle_auth_config)
@@ -233,6 +238,9 @@ class IstioIngressCharm(CharmBase):
         self.framework.observe(self.on.leader_elected, self._handle_ingress_config)
         self.framework.observe(self.on[PEERS_RELATION].relation_changed, self._on_peers_changed)
         self.framework.observe(self.on[PEERS_RELATION].relation_departed, self._on_peers_changed)
+        self.framework.observe(
+            self.on["gateway-metadata"].relation_changed, self._on_gateway_metadata_relation_changed
+        )
 
         # During the initialisation of the charm, we do not have a LoadBalancer and thus a LoadBalancer external IP.
         # If we need that IP to request the certs, disable cert handling until we have it.
@@ -371,6 +379,10 @@ class IstioIngressCharm(CharmBase):
 
     def _on_peers_changed(self, _):
         """Event handler for whenever peer topology changes."""
+        self._sync_all_resources()
+
+    def _on_gateway_metadata_relation_changed(self, _):
+        """Event handler for gateway-metadata relation events."""
         self._sync_all_resources()
 
     def _on_remove(self, _):
@@ -794,6 +806,9 @@ class IstioIngressCharm(CharmBase):
             )
 
         self.unit.status = ActiveStatus(f"Serving at {self._ingress_url}")
+
+        # Publish gateway metadata to related charms
+        self._publish_gateway_metadata()
 
         # Request certificate inspection.
         # Request a cert refresh in case configuration has changed
@@ -1336,6 +1351,16 @@ class IstioIngressCharm(CharmBase):
     def _certificate_secret_name(self) -> str:
         """Return the name of the Kubernetes secret used to hold TLS certificate information."""
         return f"{self.app.name}-tls-certificate"
+
+    def _publish_gateway_metadata(self):
+        """Publish Gateway workload metadata to related charms."""
+        metadata = GatewayMetadata(
+            namespace=self.model.name,
+            gateway_name=self.app.name,
+            deployment_name=self.managed_name,
+            service_account=self.managed_name,
+        )
+        self.gateway_metadata_provider.publish_metadata(metadata)
 
     @staticmethod
     def format_labels(label_dict: Dict[str, str]) -> str:

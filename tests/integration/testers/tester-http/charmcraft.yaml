@@ -13,6 +13,8 @@ bases:
         channel: "22.04"
 parts:
   charm:
+    build-packages:
+      - git
     charm-binary-python-packages:
       - cryptography
       - jsonschema
@@ -28,6 +30,9 @@ requires:
     limit: 1
   istio-ingress-route:
     interface: istio_ingress_route
+    limit: 1
+  gateway-metadata:
+    interface: gateway_metadata
     limit: 1
 
 containers:
