@@ -64,7 +64,8 @@ def test_ext_authz_setup(
     state = scenario.State(relations=relations, leader=True)
     out = istio_ingress_context.run(istio_ingress_context.on.config_changed(), state)
 
-    mock_publish.assert_called_once_with(expected_decision)
+    # forward_auth_headers will be None because the test fixture has empty headers
+    mock_publish.assert_called_once_with(expected_decision, None)
     mock_sync.assert_called_once_with(expected_decision, [])
     assert isinstance(out.unit_status, ActiveStatus)
     assert out.unit_status.message.startswith("Serving at")

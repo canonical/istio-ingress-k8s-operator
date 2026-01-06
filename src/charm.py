@@ -13,7 +13,13 @@ from urllib.parse import urlparse
 
 from charmed_service_mesh_helpers.interfaces import GatewayMetadata, GatewayMetadataProvider
 from charms.istio_ingress_k8s.v0.istio_ingress_route import IstioIngressRouteProvider
-from charms.istio_k8s.v0.istio_ingress_config import IngressConfigProvider
+from charms.istio_k8s.v0.istio_ingress_config import (
+    DEFAULT_HEADERS_TO_DOWNSTREAM_ON_ALLOW,
+    DEFAULT_HEADERS_TO_DOWNSTREAM_ON_DENY,
+    DEFAULT_HEADERS_TO_UPSTREAM_ON_ALLOW,
+    DEFAULT_INCLUDE_HEADERS_IN_CHECK,
+    IngressConfigProvider,
+)
 from charms.oauth2_proxy_k8s.v0.forward_auth import ForwardAuthRequirer, ForwardAuthRequirerConfig
 from charms.observability_libs.v1.cert_handler import CertHandler
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
@@ -698,10 +704,11 @@ class IstioIngressCharm(CharmBase):
 
         # Check authentication configuration.
         auth_decisions_address = self._get_oauth_decisions_address()
+        forward_auth_headers = self._get_forward_auth_headers()
 
         # Publish or clear the auth_decisions_address in ingress-config, if related.
         if self.model.get_relation(INGRESS_CONFIG_RELATION):
-            self._publish_to_istio_ingress_config_relation(auth_decisions_address)
+            self._publish_to_istio_ingress_config_relation(auth_decisions_address, forward_auth_headers)
 
         # If auth relation exists but no decisions address, set to blocked and remove gateway.
         if self.model.get_relation(FORWARD_AUTH_RELATION) and not auth_decisions_address:
@@ -835,6 +842,21 @@ class IstioIngressCharm(CharmBase):
 
         return auth_info.decisions_address
 
+    def _get_forward_auth_headers(self) -> Optional[List[str]]:
+        """Retrieve auth headers from forward-auth relation if available.
+
+        Returns:
+            List of headers if provided by the auth provider; otherwise, None.
+        """
+        auth_info = self.forward_auth.get_provider_info()
+        if not auth_info:
+            logger.debug("Auth relation exists but auth_info is missing.")
+            return None
+        if not auth_info.headers:
+            logger.warning("Auth relation exists but headers are missing; using default headers.")
+            return None
+        return auth_info.headers
+
     def _get_routes(self):
         """Return the routes requested by all applications on all ingress relations, and associated relation_handlers.
 
@@ -957,7 +979,9 @@ class IstioIngressCharm(CharmBase):
                     tls_enabled=is_tls_enabled,
                 )
 
-    def _publish_to_istio_ingress_config_relation(self, decisions_address: Optional[str]):
+    def _publish_to_istio_ingress_config_relation(
+        self, decisions_address: Optional[str], forward_auth_headers: Optional[List[str]]
+    ):
         if not decisions_address:
             self.ingress_config.clear()
             return
@@ -967,7 +991,16 @@ class IstioIngressCharm(CharmBase):
         port = parsed_url.port
         # TODO: Below probably needs to be leader guarded
         # we should think about this as part of working on #issues/16
-        self.ingress_config.publish(ext_authz_service_name=service_name, ext_authz_port=str(port))
+        # The forward-auth lib currently only provides upstream-facing headers (headersToUpstreamOnAllow).
+        # For other header types, we use standard defaults until the forward-auth interface is extended.
+        self.ingress_config.publish(
+            ext_authz_service_name=service_name,
+            ext_authz_port=str(port),
+            include_headers_in_check=DEFAULT_INCLUDE_HEADERS_IN_CHECK,
+            headers_to_upstream_on_allow=forward_auth_headers or DEFAULT_HEADERS_TO_UPSTREAM_ON_ALLOW,
+            headers_to_downstream_on_allow=DEFAULT_HEADERS_TO_DOWNSTREAM_ON_ALLOW,
+            headers_to_downstream_on_deny=DEFAULT_HEADERS_TO_DOWNSTREAM_ON_DENY,
+        )
 
     def _sync_ext_authz_auth_policy(
         self, auth_decisions_address: Optional[str], unauthenticated_paths: List[str]
