@@ -5,10 +5,10 @@ from unittest.mock import patch
 
 import pytest
 import scenario
+from charmed_service_mesh_helpers import Action
 from ops import ActiveStatus, BlockedStatus
 
 from charm import IstioIngressCharm
-from models import Action
 
 
 @pytest.mark.parametrize(

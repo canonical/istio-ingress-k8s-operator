@@ -246,7 +246,7 @@ def test_sync_ingress_resources(
 
         # Retrieve the resources passed to reconcile
         ingress_resources = mock_ingress_manager.reconcile.call_args[0][0]
-        auth_resources = mock_auth_manager.reconcile.call_args[0][0]
+        auth_resources = mock_auth_manager.reconcile.call_args.kwargs["raw_policies"]
 
         # Assertions: Check resource counts
         assert len(ingress_resources) == len(expected_ingressed_prefixes)

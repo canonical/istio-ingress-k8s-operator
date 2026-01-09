@@ -11,7 +11,20 @@ import time
 from typing import Dict, List, Optional, cast
 from urllib.parse import urlparse
 
+from charmed_service_mesh_helpers import (
+    Action,
+    AuthorizationPolicySpec,
+    From,
+    Operation,
+    PolicyTargetReference,
+    Provider,
+    Rule,
+    Source,
+    To,
+    WorkloadSelector,
+)
 from charmed_service_mesh_helpers.interfaces import GatewayMetadata, GatewayMetadataProvider
+from charms.istio_beacon_k8s.v0.service_mesh import MeshType, PolicyResourceManager
 from charms.istio_ingress_k8s.v0.istio_ingress_route import IstioIngressRouteProvider
 from charms.istio_k8s.v0.istio_ingress_config import IngressConfigProvider
 from charms.oauth2_proxy_k8s.v0.forward_auth import ForwardAuthRequirer, ForwardAuthRequirerConfig
@@ -33,18 +46,14 @@ from lightkube.resources.autoscaling_v2 import HorizontalPodAutoscaler
 from lightkube.resources.core_v1 import Secret, Service
 from lightkube.types import PatchType
 from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
+from lightkube_extensions.types import AuthorizationPolicy
 from ops import BlockedStatus, main
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, MaintenanceStatus
 from ops.pebble import ChangeError, Layer
 
 from models import (
-    Action,
     AllowedRoutes,
-    AuthorizationPolicyResource,
-    AuthorizationPolicySpec,
-    AuthRule,
-    From,
     GatewayTLSConfig,
     GRPCRouteResource,
     GRPCRouteResourceSpec,
@@ -56,14 +65,8 @@ from models import (
     IstioGatewaySpec,
     Listener,
     Metadata,
-    Operation,
     ParentRef,
-    PolicyTargetReference,
-    Provider,
     SecretObjectReference,
-    Source,
-    To,
-    WorkloadSelector,
 )
 from utils import (
     INGRESS_AUTHENTICATED_NAME,
@@ -108,12 +111,6 @@ RESOURCE_TYPES = {
     "ReferenceGrant": create_namespaced_resource(
         "gateway.networking.k8s.io", "v1beta1", "ReferenceGrant", "referencegrants"
     ),
-    "AuthorizationPolicy": create_namespaced_resource(
-        "security.istio.io",
-        "v1",
-        "AuthorizationPolicy",
-        "authorizationpolicies",
-    ),
     "DestinationRule": create_namespaced_resource(
         "networking.istio.io", "v1", "DestinationRule", "destinationrules"
     ),
@@ -126,7 +123,6 @@ INGRESS_RESOURCE_TYPES = {
     RESOURCE_TYPES["HTTPRoute"],
 }
 
-AUTHORIZATION_POLICY_RESOURCE_TYPES = {RESOURCE_TYPES["AuthorizationPolicy"]}
 GRPC_DESTINATION_RULE_RESOURCE_TYPES = {RESOURCE_TYPES["DestinationRule"]}
 
 GATEWAY_SCOPE = "istio-gateway"
@@ -323,22 +319,22 @@ class IstioIngressCharm(CharmBase):
         )
 
     def _get_ingress_auth_policy_resource_manager(self):
-        return KubernetesResourceManager(
+        return PolicyResourceManager(
+            charm=self,
+            lightkube_client=self.lightkube_client,
             labels=create_charm_default_labels(
                 self.app.name, self.model.name, scope=INGRESS_AUTH_POLICY_SCOPE
             ),
-            resource_types=AUTHORIZATION_POLICY_RESOURCE_TYPES,  # pyright: ignore
-            lightkube_client=self.lightkube_client,
             logger=logger,
         )
 
     def _get_extz_auth_policy_resource_manager(self):
-        return KubernetesResourceManager(
+        return PolicyResourceManager(
+            charm=self,
+            lightkube_client=self.lightkube_client,
             labels=create_charm_default_labels(
                 self.app.name, self.model.name, scope=EXTZ_AUTH_POLICY_SCOPE
             ),
-            resource_types=AUTHORIZATION_POLICY_RESOURCE_TYPES,  # pyright: ignore
-            lightkube_client=self.lightkube_client,
             logger=logger,
         )
 
@@ -582,14 +578,14 @@ class IstioIngressCharm(CharmBase):
         self, target_name: str, target_namespace: str, target_port: int
     ):
         """Return an AuthorizationPolicy that allows the ingress workload to communicate with the target workload."""
-        auth_policy = AuthorizationPolicyResource(
-            metadata=Metadata(
+        return AuthorizationPolicy(
+            metadata=ObjectMeta(
                 name=target_name + "-" + self.app.name + "-" + target_namespace + "-l4",
                 namespace=target_namespace,
             ),
             spec=AuthorizationPolicySpec(
                 rules=[
-                    AuthRule(
+                    Rule(
                         to=[To(operation=Operation(ports=[str(target_port)]))],
                         from_=[  # type: ignore # this is accessible via an alias "from"
                             # The ServiceAccount that is used to deploy the Gateway (ingress) workload
@@ -607,15 +603,7 @@ class IstioIngressCharm(CharmBase):
                 ],
                 selector=WorkloadSelector(matchLabels={"app.kubernetes.io/name": target_name}),
                 action=Action.allow,
-            ),
-        )
-        auth_resource = RESOURCE_TYPES["AuthorizationPolicy"]
-        return auth_resource(
-            metadata=ObjectMeta.from_dict(auth_policy.metadata.model_dump()),
-            # by_alias=True because the model includes an alias for the `from` field
-            # exclude_unset=True because unset fields will be treated as their default values in Kubernetes
-            # exclude_none=True because null values in this data always mean the Kubernetes default
-            spec=auth_policy.spec.model_dump(by_alias=True, exclude_unset=True, exclude_none=True),
+            ).model_dump(by_alias=True, exclude_unset=True, exclude_none=True),
         )
 
     def _construct_ext_authz_policy(
@@ -623,14 +611,14 @@ class IstioIngressCharm(CharmBase):
     ):
         """Return an AuthorizationPolicy that applies authentication to all paths except unauthenticated_paths."""
         if unauthenticated_paths:
-            auth_rule = AuthRule(
+            auth_rule = Rule(
                 to=[To(operation=Operation(notPaths=unauthenticated_paths))],
             )
         else:
-            auth_rule = AuthRule()
+            auth_rule = Rule()
 
-        ext_authz_policy = AuthorizationPolicyResource(
-            metadata=Metadata(
+        return AuthorizationPolicy(
+            metadata=ObjectMeta(
                 name=f"ext-authz-{self.app.name}",
                 namespace=self.model.name,
             ),
@@ -645,17 +633,7 @@ class IstioIngressCharm(CharmBase):
                 ],
                 action=Action.custom,
                 provider=Provider(name=ext_authz_provider_name),
-            ),
-        )
-        auth_resource = RESOURCE_TYPES["AuthorizationPolicy"]
-        return auth_resource(
-            metadata=ObjectMeta.from_dict(ext_authz_policy.metadata.model_dump()),
-            # by_alias=True because the model includes an alias for the `from` field
-            # exclude_unset=True because unset fields will be treated as their default values in Kubernetes
-            # exclude_none=True because null values in this data always mean the Kubernetes default
-            spec=ext_authz_policy.spec.model_dump(
-                by_alias=True, exclude_unset=True, exclude_none=True
-            ),
+            ).model_dump(by_alias=True, exclude_unset=True, exclude_none=True),
         )
 
     def _construct_hpa(self, unit_count: int) -> HorizontalPodAutoscaler:
@@ -980,7 +958,7 @@ class IstioIngressCharm(CharmBase):
             provider_name = self.ingress_config.get_ext_authz_provider_name()
             resources.append(self._construct_ext_authz_policy(provider_name, unauthenticated_paths=unauthenticated_paths))  # type: ignore
 
-        policy_manager.reconcile(resources)
+        policy_manager.reconcile(policies=[], mesh_type=MeshType.istio, raw_policies=resources)
 
     def _sync_gateway_resources(self, normalized_listeners: List[GatewayListener]):
         """Synchronize Gateway resources using normalized listeners.
@@ -1248,7 +1226,7 @@ class IstioIngressCharm(CharmBase):
         route_krm.reconcile(all_routes)
 
         kam = self._get_ingress_auth_policy_resource_manager()
-        kam.reconcile(auth_policies)
+        kam.reconcile(policies=[], mesh_type=MeshType.istio, raw_policies=auth_policies)
 
     def _ingress_url_with_scheme(self) -> str:
         """Return the url to the ingress managed by this charm, including scheme.
