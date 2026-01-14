@@ -3,13 +3,13 @@
 # Copyright 2024 Canonical Ltd.
 # See LICENSE file for licensing details.
 """This module defines Pydantic schemas for various resources used in the Kubernetes Gateway API."""
-from enum import Enum
 from typing import Dict, List, Optional
 
 from charms.istio_ingress_k8s.v0.istio_ingress_route import GRPCRouteFilter, HTTPRouteFilter
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel
 
 # TODO: Deduplicate and consolidate the mix-n-match of models between here and istio_ingress_route lib. See https://github.com/canonical/istio-ingress-k8s-operator/issues/117.
+
 
 # Global metadata schema
 class Metadata(BaseModel):
@@ -161,102 +161,3 @@ class GRPCRouteResource(BaseModel):
 
     metadata: Metadata
     spec: GRPCRouteResourceSpec
-
-
-# Authrization Policy schema
-# Below is stripped down to cater for only L4 needed policies for ingress
-
-
-class Action(str, Enum):
-    """Action is a type that represents the action to take when a rule matches."""
-
-    allow = "ALLOW"
-    custom = "CUSTOM"
-
-
-class PolicyTargetReference(BaseModel):
-    """PolicyTargetReference defines the target of the policy."""
-
-    group: str
-    kind: str
-    name: str
-    namespace: Optional[str] = None
-
-
-class WorkloadSelector(BaseModel):
-    """WorkloadSelector defines the selector for the policy."""
-
-    matchLabels: Dict[str, str]
-
-
-class Source(BaseModel):
-    """Source defines the source of the policy."""
-
-    principals: Optional[List[str]] = None
-
-
-class From(BaseModel):
-    """From defines the source of the policy."""
-
-    source: Source
-
-
-class Operation(BaseModel):
-    """Operation defines the operation of the To model."""
-
-    notPaths: Optional[List[str]] = None
-    ports: Optional[List[str]] = None
-    paths: Optional[List[str]] = None
-
-
-class To(BaseModel):
-    """To defines the destination of the policy."""
-
-    operation: Optional[Operation] = None
-
-
-class Provider(BaseModel):
-    """Specifies the name of the extension provider, must be used only with CUSTOM action."""
-
-    name: Optional[str] = None
-
-
-class AuthRule(BaseModel):
-    """AuthRule defines a policy rule."""
-
-    from_: Optional[List[From]] = Field(default=None, alias="from")
-    to: Optional[List[To]] = None
-    # Allows us to populate with `Rule(from_=[From()])`.  Without this, we can only use they alias `from`, which is
-    # protected, meaning we could only build rules from a dict like `Rule(**{"from": [From()]})`.
-    model_config = ConfigDict(populate_by_name=True)
-
-
-class AuthorizationPolicySpec(BaseModel):
-    """AuthorizationPolicySpec defines the spec of an Istio AuthorizationPolicy Kubernetes resource."""
-
-    action: Action
-    rules: List[AuthRule]
-    targetRefs: Optional[List[PolicyTargetReference]] = Field(default=None)
-    selector: Optional[WorkloadSelector] = Field(default=None)
-    provider: Optional[Provider] = Field(default=None)
-
-    @model_validator(mode="after")
-    def validate_target_refs_selector(self):
-        """Validate that at most one of targetRefs and selector is defined."""
-        if self.targetRefs is not None and self.selector is not None:
-            raise ValueError("At most one of targetRefs and selector can be set")
-        return self
-
-    @model_validator(mode="after")
-    def validate_provider_action(self):
-        """Validate that CUSTOM action must be set when specifying extension providers."""
-        if self.provider is not None and self.action is not Action.custom:
-            raise ValueError("CUSTOM action must be set when specifying extension providers")
-        return self
-
-
-class AuthorizationPolicyResource(BaseModel):
-    """AuthorizationPolicyResource defines the structure of an Istio AuthorizationPolicy Kubernetes resource."""
-
-    metadata: Metadata
-    spec: AuthorizationPolicySpec
