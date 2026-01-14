@@ -17,6 +17,12 @@ from helpers import (
 )
 from pytest_operator.plugin import OpsTest
 
+# Expected default header values (based on oauth2-proxy requirements)
+# These must match the defaults defined in lib/charms/istio_k8s/v0/istio_ingress_config.py
+EXPECTED_INCLUDE_HEADERS_IN_CHECK = ["authorization", "cookie"]
+EXPECTED_HEADERS_TO_DOWNSTREAM_ON_ALLOW = ["set-cookie"]
+EXPECTED_HEADERS_TO_DOWNSTREAM_ON_DENY = ["content-type", "set-cookie"]
+
 logger = logging.getLogger(__name__)
 
 METADATA = yaml.safe_load(Path("./charmcraft.yaml").read_text())
@@ -193,6 +199,7 @@ async def assert_config_state(ops_test: OpsTest, istio_core, policy_name: str) -
     - The provider exists and its name is present.
     - The Istio mesh config contains an extensionProvider with the proper envoy config.
     - The envoyExtAuthzHttp has a matching provider.
+    - All 4 header configurations are present with expected values.
     """
     policy_spec = await get_auth_policy_spec(ops_test.model.name, policy_name)
     assert policy_spec, f"AuthorizationPolicy '{policy_name}' not found."
@@ -209,3 +216,20 @@ async def assert_config_state(ops_test: OpsTest, istio_core, policy_name: str) -
     assert (
         envoy_authz.get("service") == expected_service
     ), f"Expected service '{expected_service}', got '{envoy_authz.get('service')}'"
+
+    # Verify header configurations
+    assert envoy_authz.get("includeRequestHeadersInCheck") == EXPECTED_INCLUDE_HEADERS_IN_CHECK, (
+        f"Expected includeRequestHeadersInCheck '{EXPECTED_INCLUDE_HEADERS_IN_CHECK}', "
+        f"got '{envoy_authz.get('includeRequestHeadersInCheck')}'"
+    )
+    # headersToUpstreamOnAllow may come from oauth2-proxy or use defaults
+    headers_to_upstream = envoy_authz.get("headersToUpstreamOnAllow")
+    assert headers_to_upstream is not None, "headersToUpstreamOnAllow is missing"
+    assert envoy_authz.get("headersToDownstreamOnAllow") == EXPECTED_HEADERS_TO_DOWNSTREAM_ON_ALLOW, (
+        f"Expected headersToDownstreamOnAllow '{EXPECTED_HEADERS_TO_DOWNSTREAM_ON_ALLOW}', "
+        f"got '{envoy_authz.get('headersToDownstreamOnAllow')}'"
+    )
+    assert envoy_authz.get("headersToDownstreamOnDeny") == EXPECTED_HEADERS_TO_DOWNSTREAM_ON_DENY, (
+        f"Expected headersToDownstreamOnDeny '{EXPECTED_HEADERS_TO_DOWNSTREAM_ON_DENY}', "
+        f"got '{envoy_authz.get('headersToDownstreamOnDeny')}'"
+    )
