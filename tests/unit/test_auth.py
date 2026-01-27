@@ -176,3 +176,38 @@ def test_construct_ext_authz_policy(
             # Has a single empty rule
             assert len(auth_policy["spec"]["rules"]) == 1
             assert auth_policy["spec"]["rules"][0] == {}
+
+
+@pytest.mark.parametrize(
+    "ip_blocks",
+    [
+        # Single CIDR - allow all
+        (["0.0.0.0/0"]),
+        # Multiple CIDRs
+        (["10.0.0.0/8", "192.168.0.0/16"]),
+    ],
+)
+def test_construct_external_traffic_auth_policy(
+    ip_blocks,
+    istio_ingress_charm,
+    istio_ingress_context,
+):
+    """Test that _construct_external_traffic_auth_policy creates correct policy with IP blocks."""
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(leader=True),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+
+        auth_policy = charm._construct_external_traffic_auth_policy(ip_blocks=ip_blocks)
+
+        # Is an allow action
+        assert auth_policy["spec"]["action"] == Action.allow
+        # Targets the Gateway
+        assert len(auth_policy["spec"]["targetRefs"]) == 1
+        assert auth_policy["spec"]["targetRefs"][0]["kind"] == "Gateway"
+        assert auth_policy["spec"]["targetRefs"][0]["group"] == "gateway.networking.k8s.io"
+        assert auth_policy["spec"]["targetRefs"][0]["name"] == charm.app.name
+        # Has a single rule with correct ipBlocks
+        assert len(auth_policy["spec"]["rules"]) == 1
+        assert auth_policy["spec"]["rules"][0]["from"][0]["source"]["ipBlocks"] == ip_blocks

@@ -9,7 +9,8 @@ dependencies = [
     "pydantic>=2",
     "lightkube-extensions",
     "cosl",
-    "charmed-service-mesh-helpers>=0.4.0",
+    # TODO: revert to "charmed-service-mesh-helpers>=0.x.0" before merging once ipBlocks charmed-service-mesh-helpers PR is merged
+    "charmed-service-mesh-helpers @ git+https://github.com/canonical/charmed-service-mesh-helpers@feat/SMS-597-extend-Source-model-with-ipblocks",
     "cryptography~=42.0.0", # Deps: tls_certificates_interface libs
     "opentelemetry-exporter-otlp-proto-http==1.21.0", # PYDEPS: lib/charms/tempo_coordinator_k8s/v0/charm_tracing.py
     "jsonschema>=4.22.0", # Deps: traefik_k8s libs, tls_certificates_interface libs

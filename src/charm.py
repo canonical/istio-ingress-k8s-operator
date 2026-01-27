@@ -135,6 +135,7 @@ GATEWAY_SCOPE = "istio-gateway"
 INGRESS_SCOPE = "istio-ingress"
 INGRESS_AUTH_POLICY_SCOPE = "istio-ingress-authorization-policy"
 EXTZ_AUTH_POLICY_SCOPE = "external-authorizer-authorization-policy"
+EXTERNAL_TRAFFIC_AUTH_POLICY_SCOPE = "external-traffic-authorization-policy"
 GRPC_DESTINATION_RULE_SCOPE = "grpc-destination-rule"
 
 INGRESS_CONFIG_RELATION = "istio-ingress-config"
@@ -344,6 +345,16 @@ class IstioIngressCharm(CharmBase):
             logger=logger,
         )
 
+    def _get_external_traffic_auth_policy_resource_manager(self):
+        return PolicyResourceManager(
+            charm=self,
+            lightkube_client=self.lightkube_client,
+            labels=create_charm_default_labels(
+                self.app.name, self.model.name, scope=EXTERNAL_TRAFFIC_AUTH_POLICY_SCOPE
+            ),
+            logger=logger,
+        )
+
     def _get_grpc_destination_rule_resource_manager(self):
         """Get KubernetesResourceManager for gRPC DestinationRules."""
         return KubernetesResourceManager(
@@ -416,6 +427,9 @@ class IstioIngressCharm(CharmBase):
 
         keam = self._get_extz_auth_policy_resource_manager()
         keam.delete()
+
+        ketam = self._get_external_traffic_auth_policy_resource_manager()
+        ketam.delete()
 
     def _on_ingress_data_provided(self, _):
         """Handle a unit providing data requesting IPU."""
@@ -642,6 +656,34 @@ class IstioIngressCharm(CharmBase):
             ).model_dump(by_alias=True, exclude_unset=True, exclude_none=True),
         )
 
+    def _construct_external_traffic_auth_policy(self, ip_blocks: List[str]):
+        """Return an AuthorizationPolicy that allows external traffic from specified IP blocks.
+
+        Args:
+            ip_blocks: List of CIDR blocks to allow traffic from (e.g., ["0.0.0.0/0"])
+        """
+        return AuthorizationPolicy(
+            metadata=ObjectMeta(
+                name=f"{self.app.name}-{self.model.name}-external-traffic",
+                namespace=self.model.name,
+            ),
+            spec=AuthorizationPolicySpec(
+                rules=[
+                    Rule(
+                        from_=[From(source=Source(ipBlocks=ip_blocks))],  # type: ignore
+                    )
+                ],
+                targetRefs=[
+                    PolicyTargetReference(
+                        kind="Gateway",
+                        group="gateway.networking.k8s.io",
+                        name=self.app.name,
+                    )
+                ],
+                action=Action.allow,
+            ).model_dump(by_alias=True, exclude_unset=True, exclude_none=True),
+        )
+
     def _construct_hpa(self, unit_count: int) -> HorizontalPodAutoscaler:
         return HorizontalPodAutoscaler(
             metadata=ObjectMeta(name=self.app.name, namespace=self.model.name),
@@ -749,6 +791,7 @@ class IstioIngressCharm(CharmBase):
             self._remove_gateway_resources()
             return
         self._sync_ext_authz_auth_policy(auth_decisions_address, unauthenticated_paths)
+        self._sync_external_traffic_auth_policy()
 
         # Reconcile HPA and gateway resources
 
@@ -991,6 +1034,14 @@ class IstioIngressCharm(CharmBase):
             provider_name = self.ingress_config.get_ext_authz_provider_name()
             resources.append(self._construct_ext_authz_policy(provider_name, unauthenticated_paths=unauthenticated_paths))  # type: ignore
 
+        policy_manager.reconcile(policies=[], mesh_type=MeshType.istio, raw_policies=resources)
+
+    def _sync_external_traffic_auth_policy(self):
+        """Reconcile the AuthorizationPolicy that allows external traffic to the gateway."""
+        policy_manager = self._get_external_traffic_auth_policy_resource_manager()
+        cidrs_config = cast(str, self.config["external-traffic-policy-cidrs"])
+        ip_blocks = [cidr.strip() for cidr in cidrs_config.split(",") if cidr.strip()]
+        resources = [self._construct_external_traffic_auth_policy(ip_blocks)]
         policy_manager.reconcile(policies=[], mesh_type=MeshType.istio, raw_policies=resources)
 
     def _sync_gateway_resources(self, normalized_listeners: List[GatewayListener]):
