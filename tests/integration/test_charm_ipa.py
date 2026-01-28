@@ -309,6 +309,11 @@ async def test_external_traffic_policy(ops_test: OpsTest):
     The external traffic authorization policy creates an ALLOW rule for the Gateway.
     Traffic from IPs not in the configured CIDR blocks should be denied (403).
     """
+    # Reset external_hostname to empty (previous test may have set it to "foo.bar")
+    # This ensures the gateway accepts requests without a specific Host header
+    await ops_test.model.applications[APP_NAME].set_config({"external_hostname": ""})
+    await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=300)
+
     model = ops_test.model.name
     istio_ingress_address = await get_k8s_service_address(ops_test, "istio-ingress-k8s-istio")
     tester_url = f"http://{istio_ingress_address}/{model}-{IPA_TESTER}"
@@ -322,7 +327,8 @@ async def test_external_traffic_policy(ops_test: OpsTest):
     assert policy_spec["targetRefs"][0]["kind"] == "Gateway"
 
     # Test with default config (0.0.0.0/0) - traffic should be allowed
-    response = requests.get(tester_url)
+    # Note: verify=False is used because TLS may be enabled from previous test with self-signed certs
+    response = requests.get(tester_url, verify=False)
     assert response.status_code == 200, f"Expected 200 with default CIDR, got {response.status_code}"
 
     # Change to a wrong IP - traffic should be denied
@@ -331,7 +337,7 @@ async def test_external_traffic_policy(ops_test: OpsTest):
     )
     await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=300)
 
-    response = requests.get(tester_url)
+    response = requests.get(tester_url, verify=False)
     assert response.status_code == 403, f"Expected 403 with wrong CIDR, got {response.status_code}"
 
     # Change back to permissive - traffic should be allowed again
@@ -340,7 +346,7 @@ async def test_external_traffic_policy(ops_test: OpsTest):
     )
     await ops_test.model.wait_for_idle([APP_NAME], status="active", timeout=300)
 
-    response = requests.get(tester_url)
+    response = requests.get(tester_url, verify=False)
     assert response.status_code == 200, f"Expected 200 after restoring CIDR, got {response.status_code}"
 
 
