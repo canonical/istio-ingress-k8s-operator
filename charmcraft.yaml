@@ -47,11 +47,18 @@ config:
       description: |
         The DNS name to be used by Istio ingress.
         If unspecified, the gateway ingress ip address will be used, e.g,
-        as provided by MetalLB. This needs to be a `bare` hostname: i.e. 
+        as provided by MetalLB. This needs to be a `bare` hostname: i.e.
         no schema prefix and no port.
-        Hostname can be “precise” which is a domain name without the terminating dot of a network host (e.g. “foo.example.com”).
+        Hostname can be "precise" which is a domain name without the terminating dot of a network host (e.g. "foo.example.com").
         It's also important to note that domain name prefixed with a single wildcard label (e.g. *.example.com) isn't supported for now.
       type: string
+    external-traffic-policy-cidrs:
+      description: |
+        Comma-separated list of IPs or CIDR blocks from which external traffic is allowed.
+        Traffic from source IPs outside these ranges will be denied by the gateway.
+        Example: "10.0.0.0/8,192.168.0.0/16", "192.168.1.1", or "0.0.0.0/0" to allow all.
+      type: string
+      default: "0.0.0.0/0"
 
 peers:
   peers:

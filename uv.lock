@@ -446,16 +446,16 @@ wheels = [
 
 [[package]]
 name = "charmed-service-mesh-helpers"
-version = "0.4.0"
+version = "0.5.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ops" },
     { name = "pydantic", version = "2.10.6", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "pydantic", version = "2.12.5", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/98/c5/c818d654c5a99071e1e2dea97cc092efb5b0e6308721ab8c644c9b1e3352/charmed_service_mesh_helpers-0.4.0.tar.gz", hash = "sha256:71ea5ed99b8e27debb4c001be7e3d5acb20001f48a4e2f705f1432269d93dc61", size = 16810, upload-time = "2026-01-14T11:03:14.909Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/30/5a/c7121d51403381ad64c2cfe21aefe8123ef44de00de2a139df0c4ee3d16d/charmed_service_mesh_helpers-0.5.0.tar.gz", hash = "sha256:b5188e9c915bc5c816e2a128d544ef86919077f99408fe5598b367892b42eb45", size = 16817, upload-time = "2026-01-28T14:27:21.76Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ec/82/e186dbcd159e676b45cc410799be3597b771bce80f18821e7cfa7e3fe23f/charmed_service_mesh_helpers-0.4.0-py3-none-any.whl", hash = "sha256:77907e04bea963ea26048e282c6d4253ed06f3e01beded015ece0020ebc613f5", size = 16430, upload-time = "2026-01-14T11:03:16.75Z" },
+    { url = "https://files.pythonhosted.org/packages/f3/1f/4ad28b51304ca7c7dd1c8e5f41cc03f792b6aed94c700994804a2947796a/charmed_service_mesh_helpers-0.5.0-py3-none-any.whl", hash = "sha256:7fcf98434b1ba7a47cae118037a9977ada574cfe3533ba634b5a0cd66ef6cd49", size = 16430, upload-time = "2026-01-28T14:27:20.947Z" },
 ]
 
 [[package]]
@@ -991,7 +991,7 @@ version = "1.3.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "typing-extensions", version = "4.13.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
-    { name = "typing-extensions", version = "4.15.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9' and python_full_version < '3.13'" },
+    { name = "typing-extensions", version = "4.15.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9' and python_full_version < '3.11'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/50/79/66800aadf48771f6b62f7eb014e352e5d06856655206165d775e675a02c9/exceptiongroup-1.3.1.tar.gz", hash = "sha256:8b412432c6055b0b7d14c310000ae93352ed6754f70fa8f7c34141f91c4e3219", size = 30371, upload-time = "2025-11-21T23:01:54.787Z" }
 wheels = [
@@ -1636,7 +1636,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "charmed-service-mesh-helpers", specifier = ">=0.4.0" },
+    { name = "charmed-service-mesh-helpers", specifier = ">=0.5.0" },
     { name = "cosl" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'" },
     { name = "cryptography", specifier = "~=42.0.0" },
