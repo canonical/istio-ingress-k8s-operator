@@ -1190,14 +1190,38 @@ wheels = [
 
 [[package]]
 name = "grpcio-tools"
-version = "1.62.3"
+version = "1.30.0"
 source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.8.6' and python_full_version < '3.9'",
+    "python_full_version < '3.8.6'",
+]
 dependencies = [
     { name = "grpcio", version = "1.70.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "protobuf", marker = "python_full_version < '3.9'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/da/3c/bed275484f6cc262b5de6ceaae36798c60d7904cdd05dc79cc830b880687/grpcio-tools-1.30.0.tar.gz", hash = "sha256:7878adb93b0c1941eb2e0bed60719f38cda2ae5568bc0bcaa701f457e719a329", size = 2060447, upload-time = "2020-06-23T17:03:23.471Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b6/5f/c038e841f05d30759edc42d3b0c06718789d2e8e9428bce180f7c84cb87c/grpcio_tools-1.30.0-cp38-cp38-macosx_10_9_x86_64.whl", hash = "sha256:601bd2001ba9e4f2ccdf7b363c436397dcc5211194fe180fa0ad2a21df5a738e", size = 1994567, upload-time = "2020-06-23T17:03:00.525Z" },
+    { url = "https://files.pythonhosted.org/packages/3b/4c/70d2d021da36a871960040afb5e4527345e1b94d0941e56f2fcf412c22cd/grpcio_tools-1.30.0-cp38-cp38-manylinux2010_i686.whl", hash = "sha256:7874f5783bdf6afd8f8b6de721952ccc6568cf71fc7dae695a296998cd2cf1d5", size = 2574974, upload-time = "2020-06-23T17:03:02.7Z" },
+    { url = "https://files.pythonhosted.org/packages/fd/cd/33e7d17cfd5f34f33c5e525819faa6c3dfb3bf2cef71e3507fb5601a155a/grpcio_tools-1.30.0-cp38-cp38-manylinux2010_x86_64.whl", hash = "sha256:fd61d5492219f59d11d390bc223b937ef80e36aee84218497135226fdf5f41d1", size = 2457475, upload-time = "2020-06-23T17:03:04.804Z" },
+    { url = "https://files.pythonhosted.org/packages/aa/27/a263f2382aebd16036fcff931f01df2c167c5c50fac166ee6cb61648e858/grpcio_tools-1.30.0-cp38-cp38-win32.whl", hash = "sha256:912dbabb7e29dbc0f4457c214a2cb9738e224553e9d177224ec357c2f295b533", size = 1326091, upload-time = "2020-06-23T17:03:06.794Z" },
+    { url = "https://files.pythonhosted.org/packages/4a/fb/0247feebec9c6ce0b3048b9d44261de18fc691147ebd31594ff1fa20eb0e/grpcio_tools-1.30.0-cp38-cp38-win_amd64.whl", hash = "sha256:169c4b218584b071201b01ae2354bf3adf2f7d927b04154825f19b3764394fbf", size = 1605850, upload-time = "2020-06-23T17:03:08.635Z" },
+]
+
+[[package]]
+name = "grpcio-tools"
+version = "1.62.3"
+source = { registry = "https://pypi.org/simple" }
+resolution-markers = [
+    "python_full_version >= '3.11'",
+    "python_full_version == '3.10.*'",
+    "python_full_version == '3.9.*'",
+]
+dependencies = [
     { name = "grpcio", version = "1.76.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
-    { name = "protobuf" },
-    { name = "setuptools", version = "75.3.2", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
-    { name = "setuptools", version = "80.9.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
+    { name = "protobuf", marker = "python_full_version >= '3.9'" },
+    { name = "setuptools", marker = "python_full_version >= '3.9'" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/54/fa/b69bd8040eafc09b88bb0ec0fea59e8aacd1a801e688af087cead213b0d0/grpcio-tools-1.62.3.tar.gz", hash = "sha256:7c7136015c3d62c3eef493efabaf9e3380e3e66d24ee8e94c01cb71377f57833", size = 4538520, upload-time = "2024-08-06T00:37:11.035Z" }
 wheels = [
@@ -1617,7 +1641,8 @@ dev = [
     { name = "grpcio", version = "1.70.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
     { name = "grpcio", version = "1.76.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
     { name = "grpcio-reflection" },
-    { name = "grpcio-tools" },
+    { name = "grpcio-tools", version = "1.30.0", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.9'" },
+    { name = "grpcio-tools", version = "1.62.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.9'" },
     { name = "juju", version = "3.5.2.1", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version < '3.8.6'" },
     { name = "juju", version = "3.6.1.3", source = { registry = "https://pypi.org/simple" }, marker = "python_full_version >= '3.8.6'" },
     { name = "ops-scenario" },
@@ -3611,29 +3636,11 @@ wheels = [
 
 [[package]]
 name = "setuptools"
-version = "75.3.2"
+version = "78.1.1"
 source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.8.6' and python_full_version < '3.9'",
-    "python_full_version < '3.8.6'",
-]
-sdist = { url = "https://files.pythonhosted.org/packages/5c/01/771ea46cce201dd42cff043a5eea929d1c030fb3d1c2ee2729d02ca7814c/setuptools-75.3.2.tar.gz", hash = "sha256:3c1383e1038b68556a382c1e8ded8887cd20141b0eb5708a6c8d277de49364f5", size = 1354489, upload-time = "2025-03-12T00:02:19.004Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/81/9c/42314ee079a3e9c24b27515f9fbc7a3c1d29992c33451779011c74488375/setuptools-78.1.1.tar.gz", hash = "sha256:fcc17fd9cd898242f6b4adfaca46137a9edef687f43e6f78469692a5e70d851d", size = 1368163, upload-time = "2025-04-19T18:23:36.68Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/15/65/3f0dba35760d902849d39d38c0a72767794b1963227b69a587f8a336d08c/setuptools-75.3.2-py3-none-any.whl", hash = "sha256:90ab613b6583fc02d5369cbca13ea26ea0e182d1df2d943ee9cbe81d4c61add9", size = 1251198, upload-time = "2025-03-12T00:02:17.554Z" },
-]
-
-[[package]]
-name = "setuptools"
-version = "80.9.0"
-source = { registry = "https://pypi.org/simple" }
-resolution-markers = [
-    "python_full_version >= '3.11'",
-    "python_full_version == '3.10.*'",
-    "python_full_version == '3.9.*'",
-]
-sdist = { url = "https://files.pythonhosted.org/packages/18/5d/3bf57dcd21979b887f014ea83c24ae194cfcd12b9e0fda66b957c69d1fca/setuptools-80.9.0.tar.gz", hash = "sha256:f36b47402ecde768dbfafc46e8e4207b4360c654f1f3bb84475f0a28628fb19c", size = 1319958, upload-time = "2025-05-27T00:56:51.443Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a3/dc/17031897dae0efacfea57dfd3a82fdd2a2aeb58e0ff71b77b87e44edc772/setuptools-80.9.0-py3-none-any.whl", hash = "sha256:062d34222ad13e0cc312a4c02d73f059e86a4acbfbdea8f8f76b28c99f306922", size = 1201486, upload-time = "2025-05-27T00:56:49.664Z" },
+    { url = "https://files.pythonhosted.org/packages/90/99/158ad0609729111163fc1f674a5a42f2605371a4cf036d0441070e2f7455/setuptools-78.1.1-py3-none-any.whl", hash = "sha256:c3a9c4211ff4c309edb8b8c4f1cbfa7ae324c4ba9f91ff254e3d305b9fd54561", size = 1256462, upload-time = "2025-04-19T18:23:34.525Z" },
 ]
 
 [[package]]
