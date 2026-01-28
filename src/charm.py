@@ -416,20 +416,20 @@ class IstioIngressCharm(CharmBase):
             "Handling remove event: Attempting to remove application resources because application is scaling to 0."
         )
 
-        # Removing tailing ingresses
-        kim = self._get_ingress_route_resource_manager()
-        kim.delete()
+        # Removing tailing ingress resources
+        krm_ingress_routes = self._get_ingress_route_resource_manager()
+        krm_ingress_routes.delete()
 
         self._remove_gateway_resources()
 
-        kam = self._get_ingress_auth_policy_resource_manager()
-        kam.delete()
+        prm_ingress_authz = self._get_ingress_auth_policy_resource_manager()
+        prm_ingress_authz.delete()
 
-        keam = self._get_extz_auth_policy_resource_manager()
-        keam.delete()
+        prm_external_authn = self._get_extz_auth_policy_resource_manager()
+        prm_external_authn.delete()
 
-        ketam = self._get_external_traffic_auth_policy_resource_manager()
-        ketam.delete()
+        prm_external_traffic_authz = self._get_external_traffic_auth_policy_resource_manager()
+        prm_external_traffic_authz.delete()
 
     def _on_ingress_data_provided(self, _):
         """Handle a unit providing data requesting IPU."""
