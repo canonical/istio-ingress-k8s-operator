@@ -293,7 +293,7 @@ class IstioIngressCharm(CharmBase):
                         "summary": "Metrics Broadcast Proxy",
                         "command": "metrics-proxy",
                         "startup": "enabled",
-                        "environment": {"POD_LABEL_SELECTOR": self.format_labels(self._telemetry_labels)},
+                        "environment": {"POD_LABEL_SELECTOR": self.format_labels(self.telemetry_labels)},
                     }
                 },
             }
