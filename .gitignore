@@ -6,9 +6,12 @@ __pycache__/
 *.py[cod]
 .tox
 .idea/
-tests/integration/*-tester/lib/
+tests/integration/testers/*/lib/
 .env
 .vscode/
+.agent/
+.logs/
+**/*.egg-info/
 
 
 ## Terraform
