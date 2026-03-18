@@ -8,14 +8,16 @@ import os
 import shutil
 import subprocess
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Dict
 
 import pytest
 import yaml
-from pytest_operator.plugin import OpsTest
+from helpers import istio_k8s
+from jubilant import all_active
+from pytest_jubilant import get_resources, pack
 
 logger = logging.getLogger(__name__)
 
@@ -60,19 +62,16 @@ def timed_memoizer(func):
     return wrapper
 
 
-@pytest.fixture(scope="module")
-@timed_memoizer
-async def istio_ingress_charm(ops_test: OpsTest) -> Path:
+@pytest.fixture(scope="session")
+def istio_ingress_charm():
     """Istio Ingress charm used for integration testing."""
     if charm_file := os.environ.get("CHARM_PATH"):
         return Path(charm_file)
+    return pack()
 
-    charm = await ops_test.build_charm(".")
-    return charm
 
-@pytest.fixture(scope="module")
-@timed_memoizer
-async def tester_http_charm(ops_test: OpsTest):
+@pytest.fixture(scope="session")
+def tester_http_charm():
     """HTTP tester charm used for integration testing (IPA + istio-ingress-route)."""
     charm_path = (Path(__file__).parent / "testers" / "tester-http").absolute()
 
@@ -84,12 +83,11 @@ async def tester_http_charm(ops_test: OpsTest):
         shutil.rmtree(tester_lib_folder)
     shutil.copytree(root_lib_folder, tester_lib_folder)
 
-    charm = await ops_test.build_charm(charm_path, verbosity="debug")
-    return charm
+    return pack(charm_path)
 
-@pytest.fixture(scope="module")
-@timed_memoizer
-async def tester_grpc_charm(ops_test: OpsTest):
+
+@pytest.fixture(scope="session")
+def tester_grpc_charm():
     """GRPC tester charm used for integration testing (istio-ingress-route)."""
     charm_path = (Path(__file__).parent / "testers" / "tester-grpc").absolute()
 
@@ -101,8 +99,27 @@ async def tester_grpc_charm(ops_test: OpsTest):
         shutil.rmtree(tester_lib_folder)
     shutil.copytree(root_lib_folder, tester_lib_folder)
 
-    charm = await ops_test.build_charm(charm_path, verbosity="debug")
-    return charm
+    return pack(charm_path)
+
+
+# Add resources fixture for jubilant
+@pytest.fixture(scope="session")
+def resources():
+    return get_resources()
+
+
+@pytest.fixture(scope="module")
+def istio_core_juju(temp_model_factory):
+    """Deploy istio-k8s in a separate istio-core model for cross-model testing."""
+    istio_core = temp_model_factory.get_juju("istio-core")
+    istio_core.deploy(**asdict(istio_k8s))
+    istio_core.wait(
+        lambda s: all_active(s, istio_k8s.app),
+        timeout=1000,
+        delay=5,
+        successes=3,
+    )
+    return istio_core
 
 
 @dataclass
@@ -217,9 +234,7 @@ def get_relation_by_endpoint(relations, local_endpoint, remote_endpoint, remote_
     ]
     if not matches:
         raise ValueError(
-            f"no matches found with endpoint=="
-            f"{local_endpoint} "
-            f"in {remote_obj} (matches={matches})"
+            f"no matches found with endpoint=={local_endpoint} in {remote_obj} (matches={matches})"
         )
     if len(matches) > 1:
         raise ValueError(

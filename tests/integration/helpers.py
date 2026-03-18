@@ -13,7 +13,6 @@ from grpc_reflection.v1alpha import reflection_pb2, reflection_pb2_grpc
 from lightkube.generic_resource import create_namespaced_resource
 from lightkube.resources.autoscaling_v2 import HorizontalPodAutoscaler
 from lightkube.resources.core_v1 import ConfigMap, Service
-from pytest_operator.plugin import OpsTest
 from requests.adapters import DEFAULT_POOLBLOCK, DEFAULT_POOLSIZE, DEFAULT_RETRIES, HTTPAdapter
 
 logger = logging.getLogger(__name__)
@@ -21,20 +20,20 @@ logger = logging.getLogger(__name__)
 
 @dataclass
 class CharmDeploymentConfiguration:
-    entity_url: str  # aka charm name or local path to charm
-    application_name: str
+    charm: str
+    app: str
     channel: str
     trust: bool
     config: Optional[dict] = None
 
 
 istio_k8s = CharmDeploymentConfiguration(
-    entity_url="istio-k8s", application_name="istio-k8s", channel="2/edge", trust=True
+    charm="istio-k8s", app="istio-k8s", channel="2/edge", trust=True
 )
 
 oauth_k8s = CharmDeploymentConfiguration(
-    entity_url="oauth2-proxy-k8s",
-    application_name="oauth2-proxy-k8s",
+    charm="oauth2-proxy-k8s",
+    app="oauth2-proxy-k8s",
     channel="latest/edge",
     trust=True,
 )
@@ -59,91 +58,83 @@ RESOURCE_TYPES = {
 }
 
 
-async def get_k8s_service_address(ops_test: OpsTest, service_name: str) -> Optional[str]:
-    """Get the address of a LoadBalancer Kubernetes service using kubectl.
+def get_k8s_service_address(model_name: str, service_name: str) -> Optional[str]:
+    """Get the address of a LoadBalancer Kubernetes service using lightkube.
 
     Args:
-        ops_test: pytest-operator plugin
+        model_name: The name of the Juju model
         service_name: The name of the Kubernetes service
 
     Returns:
         The LoadBalancer service address as a string, or None if not found
     """
-    model = ops_test.model.info
     try:
         c = lightkube.Client()
-        svc = c.get(Service, namespace=model.name, name=service_name)
+        svc = c.get(Service, namespace=model_name, name=service_name)
         return svc.status.loadBalancer.ingress[0].ip
-
     except Exception as e:
-        logger.error("Error retrieving service address %s", e, exc_info=1)
+        logger.error("Error retrieving service address %s", e, exc_info=True)
         return None
 
 
-async def get_listener_condition(ops_test: OpsTest, gateway_name: str) -> Optional[Dict[str, Any]]:
+def get_listener_condition(model_name: str, gateway_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve the status of the listener from the Gateway resource as a dictionary.
 
     Args:
-        ops_test: pytest-operator plugin
+        model_name: Name of the Juju model.
         gateway_name: Name of the Gateway resource.
 
     Returns:
         A dictionary representing the status of the first listener, or None if not found.
     """
-    model = ops_test.model.info
     try:
         c = lightkube.Client()
-        gateway = c.get(RESOURCE_TYPES["Gateway"], namespace=model.name, name=gateway_name)
+        gateway = c.get(RESOURCE_TYPES["Gateway"], namespace=model_name, name=gateway_name)
         return cast(dict, gateway.status["listeners"][0])
-
     except Exception as e:
-        logger.error("Error retrieving Gateway listener condition: %s", e, exc_info=1)
+        logger.error("Error retrieving Gateway listener condition: %s", e, exc_info=True)
         return None
 
 
-async def get_listener_spec(ops_test: OpsTest, gateway_name: str) -> Optional[Dict[str, Any]]:
+def get_listener_spec(model_name: str, gateway_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve the spec of the listener from the Gateway resource as a dictionary.
 
     Args:
-        ops_test: pytest-operator plugin
+        model_name: Name of the Juju model.
         gateway_name: Name of the Gateway resource.
 
     Returns:
         A dictionary representing the spec of the first listener, or None if not found.
     """
-    model = ops_test.model.info
     try:
         c = lightkube.Client()
-        gateway = c.get(RESOURCE_TYPES["Gateway"], namespace=model.name, name=gateway_name)
+        gateway = c.get(RESOURCE_TYPES["Gateway"], namespace=model_name, name=gateway_name)
         return gateway.spec["listeners"][0]
-
     except Exception as e:
-        logger.error("Error retrieving Gateway listener condition: %s", e, exc_info=1)
+        logger.error("Error retrieving Gateway listener condition: %s", e, exc_info=True)
         return None
 
 
-async def get_route_spec(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any]]:
+def get_route_spec(model_name: str, route_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve and check the spec of the HTTPRoute resource.
 
     Args:
-        ops_test: pytest-operator plugin
+        model_name: Name of the Juju model.
         route_name: Name of the HTTPRoute resource.
 
     Returns:
         A dictionary representing the spec of the route, or None if not found.
     """
-    model = ops_test.model.info
     try:
         c = lightkube.Client()
-        route = c.get(RESOURCE_TYPES["HTTPRoute"], namespace=model.name, name=route_name)
+        route = c.get(RESOURCE_TYPES["HTTPRoute"], namespace=model_name, name=route_name)
         return route.spec
-
     except Exception as e:
-        logger.error("Error retrieving HTTPRoute condition: %s", e, exc_info=1)
+        logger.error("Error retrieving HTTPRoute condition: %s", e, exc_info=True)
         return None
 
 
-async def get_auth_policy_spec(model_name: str, policy_name: str) -> Optional[Dict[str, Any]]:
+def get_auth_policy_spec(model_name: str, policy_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve and check the spec of the AuthorizationPolicy resource.
 
     Args:
@@ -161,11 +152,11 @@ async def get_auth_policy_spec(model_name: str, policy_name: str) -> Optional[Di
         return policy.spec
 
     except Exception as e:
-        logger.error("Error retrieving AuthorizationPolicy condition: %s", e, exc_info=1)
+        logger.error("Error retrieving AuthorizationPolicy condition: %s", e, exc_info=True)
         return None
 
 
-async def get_configmap_data(model_name: str, cm_name: str) -> Optional[Dict[str, Any]]:
+def get_configmap_data(model_name: str, cm_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve and check the data of the ConfigMap resource.
 
     Args:
@@ -181,51 +172,49 @@ async def get_configmap_data(model_name: str, cm_name: str) -> Optional[Dict[str
         return cm.data
 
     except Exception as e:
-        logger.error("Error retrieving ConfigMap: %s", e, exc_info=1)
+        logger.error("Error retrieving ConfigMap: %s", e, exc_info=True)
         return None
 
 
-async def get_route_condition(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any]]:
+def get_route_condition(model_name: str, route_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve and check the condition from the HTTPRoute resource.
 
     Args:
-        ops_test: pytest-operator plugin
+        model_name: Name of the Juju model.
         route_name: Name of the HTTPRoute resource.
 
     Returns:
         A dictionary representing the status of the parent gateway the route is attached to, or None if not found.
     """
-    model = ops_test.model.name
     try:
         c = lightkube.Client()
-        route = c.get(RESOURCE_TYPES["HTTPRoute"], namespace=model, name=route_name)
+        route = c.get(RESOURCE_TYPES["HTTPRoute"], namespace=model_name, name=route_name)
         return cast(dict, route.status["parents"][0])
     except Exception as e:
-        logger.error("Error retrieving HTTPRoute condition: %s", e, exc_info=1)
+        logger.error("Error retrieving HTTPRoute condition: %s", e, exc_info=True)
         return None
 
 
-async def get_grpc_route_condition(ops_test: OpsTest, route_name: str) -> Optional[Dict[str, Any]]:
+def get_grpc_route_condition(model_name: str, route_name: str) -> Optional[Dict[str, Any]]:
     """Retrieve and check the condition from the GRPCRoute resource.
 
     Args:
-        ops_test: pytest-operator plugin
+        model_name: Name of the Juju model.
         route_name: Name of the GRPCRoute resource.
 
     Returns:
         A dictionary representing the status of the parent gateway the route is attached to, or None if not found.
     """
-    model = ops_test.model.name
     try:
         c = lightkube.Client()
-        route = c.get(RESOURCE_TYPES["GRPCRoute"], namespace=model, name=route_name)
+        route = c.get(RESOURCE_TYPES["GRPCRoute"], namespace=model_name, name=route_name)
         return cast(dict, route.status["parents"][0])
     except Exception as e:
-        logger.error("Error retrieving GRPCRoute condition: %s", e, exc_info=1)
+        logger.error("Error retrieving GRPCRoute condition: %s", e, exc_info=True)
         return None
 
 
-async def get_hpa(namespace: str, hpa_name: str) -> Optional[HorizontalPodAutoscaler]:
+def get_hpa(namespace: str, hpa_name: str) -> Optional[HorizontalPodAutoscaler]:
     """Retrieve the HPA resource so we can inspect .spec and .status directly.
 
     Args:
@@ -273,7 +262,7 @@ def get_http_response(url: str, headers: Optional[dict] = None):
 
 
 def send_http_request_with_custom_ca(
-    url: str, ca_cert: str, resolve_netloc_to_ip: str = None
+    url: str, ca_cert: str, resolve_netloc_to_ip: Optional[str] = None
 ) -> int:
     """Sends a request to the specified URL with an optional CA certificate and DNS resolution.
 
@@ -316,15 +305,14 @@ def send_grpc_request(address: str, port: int, service: str, method: str) -> boo
         # Get the file descriptor for the service
         stub = reflection_pb2_grpc.ServerReflectionStub(channel)
         request = reflection_pb2.ServerReflectionRequest(file_containing_symbol=service)
-        responses = stub.ServerReflectionInfo(iter([request]))
-
+        responses_iter = stub.ServerReflectionInfo(iter([request]))
         # Build descriptor pool from reflection response
         pool = descriptor_pool.DescriptorPool()
-        for response in responses:
+        for response in responses_iter:
             if response.HasField("file_descriptor_response"):
-                for file_descriptor_proto_bytes in (
-                    response.file_descriptor_response.file_descriptor_proto
-                ):
+                for (
+                    file_descriptor_proto_bytes
+                ) in response.file_descriptor_response.file_descriptor_proto:
                     file_descriptor_proto = descriptor_pb2.FileDescriptorProto()
                     file_descriptor_proto.ParseFromString(file_descriptor_proto_bytes)
                     pool.Add(file_descriptor_proto)
@@ -358,7 +346,7 @@ def send_grpc_request_with_tls(
     service: str,
     method: str,
     ca_certificate: str,
-    hostname: Optional[str] = None
+    hostname: Optional[str] = None,
 ) -> bool:
     """Send gRPC request with TLS using custom CA certificate.
 
@@ -387,15 +375,14 @@ def send_grpc_request_with_tls(
         # Get the file descriptor for the service
         stub = reflection_pb2_grpc.ServerReflectionStub(channel)
         request = reflection_pb2.ServerReflectionRequest(file_containing_symbol=service)
-        responses = stub.ServerReflectionInfo(iter([request]))
-
+        responses_iter = stub.ServerReflectionInfo(iter([request]))
         # Build descriptor pool from reflection response
         pool = descriptor_pool.DescriptorPool()
-        for response in responses:
+        for response in responses_iter:
             if response.HasField("file_descriptor_response"):
-                for file_descriptor_proto_bytes in (
-                    response.file_descriptor_response.file_descriptor_proto
-                ):
+                for (
+                    file_descriptor_proto_bytes
+                ) in response.file_descriptor_response.file_descriptor_proto:
                     file_descriptor_proto = descriptor_pb2.FileDescriptorProto()
                     file_descriptor_proto.ParseFromString(file_descriptor_proto_bytes)
                     pool.Add(file_descriptor_proto)
@@ -422,14 +409,14 @@ def send_grpc_request_with_tls(
         channel.close()
 
 
-async def get_ca_certificate(unit) -> str:
-    """Return the CA certificate from a self-signed-certificate unit.
+def get_ca_certificate(juju, unit_name: str = "self-signed-certificates/0") -> str:
+    """Return the CA certificate from a self-signed-certificate unit using the get-ca-certificate action.
 
-    :param unit: The self-signed-certificates unit.
+    :param juju: The jubilant Juju instance.
+    :param unit_name: The unit name to run the action on (e.g. "self-signed-certificates/0").
     :return: The CA certificate in PEM format.
     """
-    action = await unit.run_action("get-ca-certificate")
-    result = await action.wait()
+    result = juju.run(unit_name, "get-ca-certificate")
     return result.results["ca-certificate"]
 
 
@@ -478,9 +465,7 @@ class DNSResolverHTTPSAdapter(HTTPAdapter):
         return super().init_poolmanager(*args, **kwargs)
 
     # Ignore pylint rule as this is the parent method signature
-    def send(
-        self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None
-    ):  # pylint: disable=too-many-arguments, too-many-positional-arguments
+    def send(self, request, stream=False, timeout=None, verify=True, cert=None, proxies=None):  # pylint: disable=too-many-arguments, too-many-positional-arguments
         """Wrap HTTPAdapter send to modify the outbound request.
 
         Args:

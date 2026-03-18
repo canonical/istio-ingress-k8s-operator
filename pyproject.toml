@@ -28,12 +28,16 @@ dev = [
     "ops-scenario",
     # Integration
     "pytest-asyncio",
-    "pytest-operator",
-    "juju",
+    "jubilant",
+    "pytest-jubilant",
+    "pytest-dependency",
+    #"juju",
     "requests",
     "grpcio",
     "grpcio-reflection",
     "grpcio-tools",
+    "lightkube",
+    "protobuf",
 ]
 
 # Testing tools configuration
@@ -57,7 +61,7 @@ target-version = ["py38"]
 # Linting tools configuration
 [tool.ruff]
 line-length = 99
-extend-exclude = ["__pycache__", "*.egg_info"]
+extend-exclude = ["__pycache__", "*.egg_info", "tests/integration/testers/*/lib"]
 
 [tool.ruff.lint]
 select = ["E", "W", "F", "C", "N", "D", "I001"]
