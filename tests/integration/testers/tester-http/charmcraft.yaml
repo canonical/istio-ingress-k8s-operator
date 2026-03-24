@@ -19,6 +19,8 @@ parts:
       - cryptography
       - jsonschema
       - pydantic>=2
+      # TODO: replace with released package once charmed-service-mesh-helpers is published to PyPI
+      - charmed-service-mesh-helpers @ git+https://github.com/canonical/charmed-service-mesh-helpers@feat/SMS-642-adds-request-auth-interface
 
 
 requires:
@@ -34,6 +36,26 @@ requires:
   gateway-metadata:
     interface: gateway_metadata
     limit: 1
+  request-auth:
+    interface: request_auth
+    limit: 1
+
+actions:
+  set-request-auth:
+    description: Configure JWT-based request authentication via the request-auth relation.
+    params:
+      issuer:
+        type: string
+        description: The issuer URL for JWT validation.
+      jwks-uri:
+        type: string
+        description: The JWKS URI for fetching public keys.
+      forward-original-token:
+        type: boolean
+        default: true
+        description: Whether to forward the original token to the upstream service.
+    required:
+      - issuer
 
 containers:
   echo-server:

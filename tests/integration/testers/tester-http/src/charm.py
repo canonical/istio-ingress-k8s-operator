@@ -2,6 +2,11 @@
 # Copyright 2022 Canonical Ltd.
 # See LICENSE file for licensing details.
 from charmed_service_mesh_helpers.interfaces import GatewayMetadataRequirer
+from charmed_service_mesh_helpers.interfaces.request_auth import (
+    JWTRuleData,
+    RequestAuthData,
+    RequestAuthRequirer,
+)
 from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     BackendRef,
     HTTPPathMatch,
@@ -44,7 +49,11 @@ class HTTPTesterCharm(CharmBase):
             self, relation_name="gateway-metadata"
         )
 
+        # request-auth interface support
+        self.request_auth = RequestAuthRequirer(self, relation_name="request-auth")
+
         self.framework.observe(self.on.echo_server_pebble_ready, self._on_pebble_ready)
+        self.framework.observe(self.on.set_request_auth_action, self._on_set_request_auth)
         self.framework.observe(
             self.istio_ingress_route.on.ready, self._on_istio_ingress_route_ready
         )
@@ -137,6 +146,16 @@ class HTTPTesterCharm(CharmBase):
             ],
         )
         self.istio_ingress_route.submit_config(config)
+
+    def _on_set_request_auth(self, event):
+        """Publish JWT rules to the request-auth relation."""
+        jwt_rule = JWTRuleData(
+            issuer=event.params["issuer"],
+            jwks_uri=event.params.get("jwks-uri"),
+            forward_original_token=event.params.get("forward-original-token", True),
+        )
+        self.request_auth.publish_data(RequestAuthData(jwt_rules=[jwt_rule]))
+        event.set_results({"result": "ok"})
 
 
 if __name__ == "__main__":
