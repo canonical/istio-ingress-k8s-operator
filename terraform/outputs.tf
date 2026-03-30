@@ -5,13 +5,18 @@ output "app_name" {
 output "endpoints" {
   value = {
     # Requires
-    certificates  = "certificates"
-    charm-tracing = "charm-tracing"
-    forward-auth  = "forward-auth"
+    certificates     = "certificates"
+    charm-tracing    = "charm-tracing"
+    forward-auth     = "forward-auth"
+    upstream-ingress = "upstream-ingress"
 
     # Provides
-    ingress                 = "ingress"
-    ingress-unauthenticated = "ingress-unauthenticated"
-    metrics-endpoint        = "metrics-endpoint"
+    ingress                             = "ingress"
+    ingress-unauthenticated             = "ingress-unauthenticated"
+    metrics-endpoint                    = "metrics-endpoint"
+    istio-ingress-config                = "istio-ingress-config"
+    istio-ingress-route                 = "istio-ingress-route"
+    istio-ingress-route-unauthenticated = "istio-ingress-route-unauthenticated"
+    gateway-metadata                    = "gateway-metadata"
   }
 }
