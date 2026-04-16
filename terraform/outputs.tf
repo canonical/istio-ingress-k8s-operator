@@ -10,8 +10,12 @@ output "endpoints" {
     forward-auth  = "forward-auth"
 
     # Provides
-    ingress                 = "ingress"
-    ingress-unauthenticated = "ingress-unauthenticated"
-    metrics-endpoint        = "metrics-endpoint"
+    ingress                             = "ingress"
+    ingress-unauthenticated             = "ingress-unauthenticated"
+    metrics-endpoint                    = "metrics-endpoint"
+    istio-ingress-config                = "istio-ingress-config"
+    istio-ingress-route                 = "istio-ingress-route"
+    istio-ingress-route-unauthenticated = "istio-ingress-route-unauthenticated"
+    gateway-metadata                    = "gateway-metadata"
   }
 }
