@@ -15,7 +15,7 @@ from helpers import (
     send_http_request,
     send_http_request_with_custom_ca,
 )
-from jubilant import Juju, all_active
+from jubilant import Juju, all_active, all_agents_idle
 
 logger = logging.getLogger(__name__)
 
@@ -90,8 +90,14 @@ def test_add_tls(juju: Juju):
     )
     juju.integrate(f"{SELF_SIGNED_CERTS}:certificates", f"{APP_NAME}:certificates")
     juju.integrate(f"{SELF_SIGNED_CERTS}:certificates", f"{TRAEFIK_APP}:certificates")
+    # Wait for all apps active AND all unit agents idle. After TLS integration there's
+    # a cascade: certs issued → traefik updates URL to https → istio-ingress picks up
+    # new URL → republishes to downstream apps.  all_active alone only checks workload
+    # status (stays "active" throughout), so we also need all_agents_idle to ensure
+    # no hooks are still executing.
     juju.wait(
-        lambda s: all_active(s, APP_NAME, TRAEFIK_APP, SELF_SIGNED_CERTS, IPA_TESTER),
+        lambda s: all_active(s, APP_NAME, TRAEFIK_APP, SELF_SIGNED_CERTS, IPA_TESTER)
+        and all_agents_idle(s, APP_NAME, TRAEFIK_APP, SELF_SIGNED_CERTS, IPA_TESTER),
         timeout=1000,
         delay=5,
         successes=3,
