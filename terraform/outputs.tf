@@ -5,9 +5,10 @@ output "app_name" {
 output "endpoints" {
   value = {
     # Requires
-    certificates  = "certificates"
-    charm-tracing = "charm-tracing"
-    forward-auth  = "forward-auth"
+    certificates     = "certificates"
+    charm-tracing    = "charm-tracing"
+    forward-auth     = "forward-auth"
+    upstream-ingress = "upstream-ingress"
 
     # Provides
     ingress                             = "ingress"

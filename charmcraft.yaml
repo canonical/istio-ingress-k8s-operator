@@ -123,6 +123,14 @@ requires:
   forward-auth:
     interface: forward_auth
     limit: 1
+  upstream-ingress:
+    interface: ingress
+    limit: 1
+    description: |
+      Configure to use an ingress upstream of this gateway. Useful when you want an internal
+      gateway that is then exposed by an additional external ingress.
+      When upstream ingress is configured, the URLs published to downstream consumers will use
+      the upstream ingress's address rather than this gateway's load balancer address.
 
 resources:
   metrics-proxy-image:
