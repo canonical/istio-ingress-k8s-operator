@@ -19,8 +19,9 @@ parts:
       - cryptography
       - jsonschema
       - pydantic>=2
-      # TODO: replace with released package once charmed-service-mesh-helpers is published to PyPI
-      - charmed-service-mesh-helpers @ git+https://github.com/canonical/charmed-service-mesh-helpers@feat/SMS-642-adds-request-auth-interface
+      - charmed-service-mesh-helpers
+      # TODO: replace with released package once charmlibs istio-request-auth is published to PyPI
+      - charmlibs-interfaces-istio-request-auth @ git+https://github.com/adhityaravi/charmlibs@feat/add-istio-request-auth-lib#subdirectory=interfaces/istio-request-auth
 
 
 requires:
@@ -36,13 +37,13 @@ requires:
   gateway-metadata:
     interface: gateway_metadata
     limit: 1
-  request-auth:
-    interface: request_auth
+  istio-request-auth:
+    interface: istio_request_auth
     limit: 1
 
 actions:
   set-request-auth:
-    description: Configure JWT-based request authentication via the request-auth relation.
+    description: Configure JWT-based request authentication via the istio-request-auth relation.
     params:
       issuer:
         type: string

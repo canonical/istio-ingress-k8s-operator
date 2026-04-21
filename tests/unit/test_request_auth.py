@@ -5,29 +5,25 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 import scenario
-from charmed_service_mesh_helpers.interfaces.request_auth import (
-    JWTRuleData,
-    RequestAuthData,
-)
+from canonical_service_mesh.models.istio import JWTRule
+from charmlibs.interfaces.istio_request_auth import JWTRule as InterfaceJWTRule
 
 from charm import IstioIngressCharm
 
 
 def _make_request_auth_relation(issuer="https://issuer.example.com", jwks_uri="https://issuer.example.com/jwks"):
-    """Create a request-auth relation with JWT rule data in the remote app databag."""
-    data = RequestAuthData(
-        jwt_rules=[
-            JWTRuleData(
-                issuer=issuer,
-                jwks_uri=jwks_uri,
-                forward_original_token=True,
-            )
-        ]
-    )
+    """Create an istio-request-auth relation with JWT rule data in the remote app databag."""
+    rules = [
+        InterfaceJWTRule(
+            issuer=issuer,
+            jwks_uri=jwks_uri,
+            forward_original_token=True,
+        ).model_dump()
+    ]
     return scenario.Relation(
-        endpoint="request-auth",
-        interface="request_auth",
-        remote_app_data={"request_auth_data": data.model_dump_json()},
+        endpoint="istio-request-auth",
+        interface="istio_request_auth",
+        remote_app_data={"jwt_rules": json.dumps(rules)},
     )
 
 
@@ -38,7 +34,6 @@ def test_construct_request_authentication(istio_ingress_context):
         state=scenario.State(leader=True),
     ) as manager:
         charm: IstioIngressCharm = manager.charm
-        from charmed_service_mesh_helpers import JWTRule
 
         jwt_rules = [
             JWTRule(
@@ -73,23 +68,21 @@ def test_construct_deny_without_jwt_policy(istio_ingress_context):
 
 
 def test_convert_to_jwt_rules(istio_ingress_context):
-    """Test conversion from relation data models to Istio JWTRule models."""
-    auth_data = RequestAuthData(
-        jwt_rules=[
-            JWTRuleData(
-                issuer="https://issuer.example.com",
-                jwks_uri="https://issuer.example.com/jwks",
-                audiences=["my-audience"],
-                forward_original_token=True,
-            )
-        ]
-    )
+    """Test conversion from interface JWTRule models to Istio CRD JWTRule models."""
+    interface_jwt_rules = [
+        InterfaceJWTRule(
+            issuer="https://issuer.example.com",
+            jwks_uri="https://issuer.example.com/jwks",
+            audiences=["my-audience"],
+            forward_original_token=True,
+        )
+    ]
     with istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(leader=True),
     ) as manager:
         charm: IstioIngressCharm = manager.charm
-        jwt_rules = charm._convert_to_jwt_rules(auth_data)
+        jwt_rules = charm._convert_to_jwt_rules(interface_jwt_rules)
 
         assert len(jwt_rules) == 1
         assert jwt_rules[0].issuer == "https://issuer.example.com"

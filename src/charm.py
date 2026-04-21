@@ -11,28 +11,30 @@ import time
 from typing import Dict, List, Optional, cast
 from urllib.parse import urlparse
 
+from canonical_service_mesh.models.istio import (
+    ClaimToHeader,
+    FromHeader,
+    JWTRule,
+    RequestAuthenticationSpec,
+)
+from canonical_service_mesh.models.istio import (
+    PolicyTargetReference as RequestAuthenticationTargetRef,  # alias until we fully migrate to canonical_service_mesh.
+)
 from charmed_service_mesh_helpers import (
     Action,
     AuthorizationPolicySpec,
-    ClaimToHeader,
     Condition,
     From,
-    FromHeader,
-    JWTRule,
     Operation,
     PolicyTargetReference,
     Provider,
-    RequestAuthenticationSpec,
     Rule,
     Source,
     To,
     WorkloadSelector,
 )
 from charmed_service_mesh_helpers.interfaces import GatewayMetadata, GatewayMetadataProvider
-from charmed_service_mesh_helpers.interfaces.request_auth import (
-    RequestAuthData,
-    RequestAuthProvider,
-)
+from charmlibs.interfaces.istio_request_auth import IstioRequestAuthProvider
 from charms.istio_beacon_k8s.v0.service_mesh import MeshType, PolicyResourceManager
 from charms.istio_ingress_k8s.v0.istio_ingress_route import IstioIngressRouteProvider
 from charms.istio_k8s.v0.istio_ingress_config import (
@@ -155,7 +157,7 @@ DENY_AUTH_POLICY_SCOPE = "deny-without-jwt-authorization-policy"
 
 INGRESS_CONFIG_RELATION = "istio-ingress-config"
 FORWARD_AUTH_RELATION = "forward-auth"
-REQUEST_AUTH_RELATION = "request-auth"
+REQUEST_AUTH_RELATION = "istio-request-auth"
 PEERS_RELATION = "peers"
 
 
@@ -228,7 +230,7 @@ class IstioIngressCharm(CharmBase):
             self,
             relation_name="gateway-metadata",
         )
-        self.request_auth_provider = RequestAuthProvider(
+        self.request_auth_provider = IstioRequestAuthProvider(
             self,
             relation_name=REQUEST_AUTH_RELATION,
         )
@@ -765,33 +767,33 @@ class IstioIngressCharm(CharmBase):
             ),
         )
 
-    def _convert_to_jwt_rules(self, auth_data: RequestAuthData) -> List[JWTRule]:
-        """Convert RequestAuthData into Istio JWTRule models."""
-        jwt_rules = []
-        for rule_data in auth_data.jwt_rules:
+    def _convert_to_jwt_rules(self, interface_jwt_rules: list) -> List[JWTRule]:
+        """Convert interface JWTRule models to Istio CRD JWTRule models."""
+        istio_jwt_rules = []
+        for rule in interface_jwt_rules:
             claim_to_headers = None
-            if rule_data.claim_to_headers:
+            if rule.claim_to_headers:
                 claim_to_headers = [
-                    ClaimToHeader(header=c.header, claim=c.claim) for c in rule_data.claim_to_headers
+                    ClaimToHeader(header=c.header, claim=c.claim) for c in rule.claim_to_headers
                 ]
 
             from_headers = None
-            if rule_data.from_headers:
+            if rule.from_headers:
                 from_headers = [
-                    FromHeader(name=h.name, prefix=h.prefix) for h in rule_data.from_headers
+                    FromHeader(name=h.name, prefix=h.prefix) for h in rule.from_headers
                 ]
 
-            jwt_rules.append(
+            istio_jwt_rules.append(
                 JWTRule(
-                    issuer=rule_data.issuer,
-                    jwksUri=rule_data.jwks_uri,
-                    audiences=rule_data.audiences,
-                    forwardOriginalToken=rule_data.forward_original_token,
+                    issuer=rule.issuer,
+                    jwksUri=rule.jwks_uri,
+                    audiences=rule.audiences,
+                    forwardOriginalToken=rule.forward_original_token,
                     outputClaimToHeaders=claim_to_headers,
                     fromHeaders=from_headers,
                 )
             )
-        return jwt_rules
+        return istio_jwt_rules
 
     def _construct_request_authentication(self, app_name: str, jwt_rules: List[JWTRule]):
         """Construct a RequestAuthentication resource for a related app."""
@@ -802,7 +804,7 @@ class IstioIngressCharm(CharmBase):
             ),
             spec=RequestAuthenticationSpec(
                 targetRefs=[
-                    PolicyTargetReference(
+                    RequestAuthenticationTargetRef(
                         kind="Gateway",
                         group="gateway.networking.k8s.io",
                         name=self.app.name,
@@ -839,8 +841,8 @@ class IstioIngressCharm(CharmBase):
 
         if self.request_auth_provider.is_ready:
             all_data = self.request_auth_provider.get_data()
-            for app_name, auth_data in all_data.items():
-                jwt_rules = self._convert_to_jwt_rules(auth_data)
+            for app_name, interface_jwt_rules in all_data.items():
+                jwt_rules = self._convert_to_jwt_rules(interface_jwt_rules)
                 resources.append(self._construct_request_authentication(app_name, jwt_rules))
 
         krm.reconcile(resources)

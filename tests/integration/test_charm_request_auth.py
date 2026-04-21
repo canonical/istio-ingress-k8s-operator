@@ -24,7 +24,7 @@ resources = {
 
 IPA_TESTER = "ra-tester"
 MOCK_OAUTH2 = "mock-oauth2"
-REQUEST_AUTH_RELATION = "request-auth"
+REQUEST_AUTH_RELATION = "istio-request-auth"
 
 
 @pytest.mark.setup

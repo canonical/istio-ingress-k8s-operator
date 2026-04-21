@@ -108,8 +108,8 @@ provides:
       Provides metadata about the Gateway workload including namespace, gateway name,
       deployment name, and service account. This allows related charms to reference
       the Gateway workload in their configurations (e.g., in AuthorizationPolicies).
-  request-auth:
-    interface: request_auth
+  istio-request-auth:
+    interface: istio_request_auth
     description: |
       Allows related applications to configure JWT-based authentication via
       Istio RequestAuthentication. Each related app provides its JWT rules
