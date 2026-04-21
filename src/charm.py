@@ -8,7 +8,7 @@ import ipaddress
 import logging
 import re
 import time
-from typing import Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, cast
 from urllib.parse import urlparse
 
 from canonical_service_mesh.models.istio import (
@@ -50,6 +50,7 @@ from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
 from charms.tempo_coordinator_k8s.v0.charm_tracing import trace_charm
 from charms.tempo_coordinator_k8s.v0.tracing import TracingEndpointRequirer
 from charms.traefik_k8s.v2.ingress import IngressPerAppProvider as IPAv2
+from charms.traefik_k8s.v2.ingress import IngressPerAppRequirer
 from lightkube.core.client import Client
 from lightkube.core.exceptions import ApiError
 from lightkube.generic_resource import create_namespaced_resource
@@ -158,6 +159,7 @@ DENY_AUTH_POLICY_SCOPE = "deny-without-jwt-authorization-policy"
 INGRESS_CONFIG_RELATION = "istio-ingress-config"
 FORWARD_AUTH_RELATION = "forward-auth"
 REQUEST_AUTH_RELATION = "istio-request-auth"
+UPSTREAM_INGRESS_RELATION = "upstream-ingress"
 PEERS_RELATION = "peers"
 
 
@@ -211,6 +213,19 @@ class IstioIngressCharm(CharmBase):
             ),
         }
         self.telemetry_labels = generate_telemetry_labels(self.app.name, self.model.name)
+
+        # Setup 'upstream-ingress' relation to allow this istio-ingress to be ingressed
+        # through another ingress provider (e.g., to layer multiple ingresses).
+        # Accurate data (scheme, port based on TLS) is sent on every reconciliation via
+        # provide_ingress_requirements() in _sync_all_resources.
+        self.upstream_ingress = IngressPerAppRequirer(
+            charm=self,
+            relation_name=UPSTREAM_INGRESS_RELATION,
+            strip_prefix=True,
+            host=self._local_gateway_address,
+            port=80,
+        )
+
         # Configure Observability
         self._scraping = MetricsEndpointProvider(
             self,
@@ -271,11 +286,16 @@ class IstioIngressCharm(CharmBase):
         )
         self.framework.observe(
             self.on[REQUEST_AUTH_RELATION].relation_broken, self._on_request_auth_changed
+            self.upstream_ingress.on.ready, self._handle_upstream_ingress_changed
+        )
+        self.framework.observe(
+            self.upstream_ingress.on.revoked, self._handle_upstream_ingress_changed
         )
 
         # During the initialisation of the charm, we do not have a LoadBalancer and thus a LoadBalancer external IP.
         # If we need that IP to request the certs, disable cert handling until we have it.
-        if (external_hostname := self._ingress_url) is None:
+        # Always use the local gateway address for certs (not cascaded upstream address).
+        if (external_hostname := self._local_gateway_address) is None:
             logger.debug(
                 "External hostname is not set and no load balancer ip available.  TLS certificate generation disabled"
             )
@@ -615,7 +635,9 @@ class IstioIngressCharm(CharmBase):
             Gateway lightkube resource
         """
         allowed_routes = AllowedRoutes(namespaces={"from": "All"})
-        hostname = self._ingress_url if self._is_valid_hostname(self._ingress_url) else None
+        # Use local gateway address for the K8s Gateway resource hostname,
+        # not the cascaded upstream address
+        hostname = self._local_gateway_address if self._is_valid_hostname(self._local_gateway_address) else None
 
         listeners = []
         for norm_listener in normalized_listeners:
@@ -970,6 +992,13 @@ class IstioIngressCharm(CharmBase):
                 "Invalid hostname provided, Please ensure this adheres to RFC 1123."
             )
             return
+
+        # Update upstream ingress relation with current host, port, and scheme.
+        # This ensures the upstream always has fresh data about how to reach this gateway.
+        # No-op if no upstream ingress is related.
+        self.upstream_ingress.provide_ingress_requirements(
+            **self._generate_upstream_ingress_route_configuration()
+        )
 
         # Synchronize ingress resources
         try:
@@ -1483,8 +1512,7 @@ class IstioIngressCharm(CharmBase):
 
         This may return None if no ingress load balancer exists.
         """
-        scheme = "https" if self._construct_gateway_tls_secret() is not None else "http"
-        return f"{scheme}://{self._ingress_url}"
+        return f"{self._ingressed_scheme}://{self._ingress_url}"
 
     @property
     def _ingress_url(self) -> Optional[str]:
@@ -1492,9 +1520,10 @@ class IstioIngressCharm(CharmBase):
 
         This will return one of (in order of preference):
         1. the value cached from a previous call to _ingress_url, even if this value has since changed
-        2. the `external-hostname` config if that is set
-        3. the load balancer address for the ingress gateway, if it exists and has an IP
-        4. None
+        2. the upstream ingress URL if an upstream ingress is configured and ready
+        3. the `external-hostname` config if that is set
+        4. the load balancer address for the ingress gateway, if it exists and has an IP
+        5. None
 
         Preference is given to the previously cached value because this charm may make several calls to this method in
         a single charm execution and the value of the load balancer address may change during that time.  Without this
@@ -1505,16 +1534,17 @@ class IstioIngressCharm(CharmBase):
         if self._ingress_url_ is not None:
             return self._ingress_url_
 
-        if external_hostname := self.model.config.get("external_hostname"):
-            hostname = cast(str, external_hostname)
-            if self._is_valid_hostname(hostname):
-                self._ingress_url_ = hostname
-                return self._ingress_url_
-            logger.error("Invalid hostname provided, Please ensure this adheres to RFC 1123")
-            return None
+        # Cascade: use upstream ingress URL if available
+        if self.upstream_ingress.is_ready():
+            url = cast(str, self.upstream_ingress.url)
+            parsed = urlparse(url)
+            address = url.replace(f"{parsed.scheme}://", "", 1).rstrip("/")
+            self._ingress_url_ = address
+            return self._ingress_url_
 
-        if lb_external_address := self._get_lb_external_address:
-            self._ingress_url_ = lb_external_address
+        # Fallback to local gateway address
+        if local_address := self._local_gateway_address:
+            self._ingress_url_ = local_address
             return self._ingress_url_
 
         logger.debug(
@@ -1523,6 +1553,50 @@ class IstioIngressCharm(CharmBase):
         )
 
         return None
+
+    @property
+    def _local_gateway_address(self) -> Optional[str]:
+        """Return the LOCAL address of this gateway (external_hostname or LB address).
+
+        Unlike _ingress_url (which cascades through upstream ingress), this always
+        returns the direct address of this gateway. Used to tell the upstream ingress
+        where to route traffic to reach this gateway, and for CertHandler SANs.
+        """
+        if external_hostname := self.model.config.get("external_hostname"):
+            hostname = cast(str, external_hostname)
+            if self._is_valid_hostname(hostname):
+                return hostname
+            return None
+        return self._get_lb_external_address
+
+    @property
+    def _ingressed_scheme(self) -> str:
+        """Return the scheme for the ingressed address.
+
+        If upstream ingress is configured and ready, returns the upstream's scheme.
+        Otherwise, returns scheme based on local TLS configuration.
+        """
+        if self.upstream_ingress.is_ready():
+            return str(urlparse(self.upstream_ingress.url).scheme)
+        return "https" if self._construct_gateway_tls_secret() is not None else "http"
+
+    def _generate_upstream_ingress_route_configuration(self) -> Dict[str, Any]:
+        """Return the scheme, host, port, and ip needed for the upstream ingress relation.
+
+        This tells the upstream ingress provider what address, port, and scheme to use
+        to route traffic to this istio-ingress gateway.
+        """
+        is_tls = self._construct_gateway_tls_secret() is not None
+        return {
+            "scheme": "https" if is_tls else "http",
+            "host": self._local_gateway_address,
+            "port": 443 if is_tls else 80,
+            "ip": self._get_lb_external_address,
+        }
+
+    def _handle_upstream_ingress_changed(self, _):
+        """Handle change in the upstream ingress relation."""
+        self._sync_all_resources()
 
     @staticmethod
     def _generate_default_path(app_name: str, model: str) -> str:
