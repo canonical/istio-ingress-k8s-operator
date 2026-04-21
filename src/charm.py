@@ -286,6 +286,8 @@ class IstioIngressCharm(CharmBase):
         )
         self.framework.observe(
             self.on[REQUEST_AUTH_RELATION].relation_broken, self._on_request_auth_changed
+        )
+        self.framework.observe(
             self.upstream_ingress.on.ready, self._handle_upstream_ingress_changed
         )
         self.framework.observe(
