@@ -858,16 +858,39 @@ class IstioIngressCharm(CharmBase):
             ).model_dump(by_alias=True, exclude_unset=True, exclude_none=True),
         )
 
-    def _sync_request_authentication(self):
-        """Reconcile RequestAuthentication resources from request-auth relations."""
-        krm = self._get_request_auth_resource_manager()
-        resources = []
+    def _sync_request_authentication(self) -> Optional[set[str]]:
+        """Reconcile RequestAuthentication resources from request-auth relations.
 
-        if self.request_auth_provider.is_ready:
-            all_data = self.request_auth_provider.get_data()
-            for app_name, interface_jwt_rules in all_data.items():
-                jwt_rules = self._convert_to_jwt_rules(interface_jwt_rules)
-                resources.append(self._construct_request_authentication(app_name, jwt_rules))
+        If any connected app has invalid or missing JWT rules, no RequestAuthentication
+        resources are created.
+
+        Returns:
+            None if all apps are valid, or the set of app names with malformed JWT rules.
+        """
+        krm = self._get_request_auth_resource_manager()
+
+        connected_apps = self.request_auth_provider.get_connected_apps()
+        valid_data = self.request_auth_provider.get_data()
+        malformed_apps = connected_apps - set(valid_data.keys())
+
+        # If an application is requesting a RequestAuthentication but has not provided valid JWT rules -
+        #  1. Log an error for that application
+        #  2. Do not create any RequestAuthentication resources - this is for security reasons
+        #  3. Return the set of malformed applications so that we can capture a BlockedStatus
+        if malformed_apps:
+            for app_name in sorted(malformed_apps):
+                logger.error(
+                    "Application %s is connected over istio-request-auth "
+                    "but has not provided valid jwt_rules",
+                    app_name,
+                )
+            krm.reconcile([])
+            return malformed_apps
+
+        resources = []
+        for app_name, interface_jwt_rules in valid_data.items():
+            jwt_rules = self._convert_to_jwt_rules(interface_jwt_rules)
+            resources.append(self._construct_request_authentication(app_name, jwt_rules))
 
         krm.reconcile(resources)
 
@@ -978,8 +1001,14 @@ class IstioIngressCharm(CharmBase):
             return
         self._sync_ext_authz_auth_policy(auth_decisions_address, unauthenticated_paths)
         self._sync_external_traffic_auth_policy()
-        self._sync_request_authentication()
+        malformed_request_auth_apps = self._sync_request_authentication()
         self._sync_deny_auth_policy()
+
+        if malformed_request_auth_apps:
+            self.unit.status = BlockedStatus(
+                "Invalid jwt_rules on istio-request-auth; check logs for details"
+            )
+            return
 
         # Reconcile HPA and gateway resources
 

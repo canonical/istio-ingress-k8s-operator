@@ -85,12 +85,6 @@ def test_configure_request_auth(juju: Juju):
     """Configure JWT rules on the tester and relate request-auth to istio-ingress."""
     # Relate request-auth first (publish_data needs an active relation)
     juju.integrate(f"{IPA_TESTER}:{REQUEST_AUTH_RELATION}", f"{APP_NAME}:{REQUEST_AUTH_RELATION}")
-    juju.wait(
-        lambda s: all_active(s, APP_NAME, IPA_TESTER),
-        timeout=1000,
-        delay=5,
-        successes=3,
-    )
 
     # Get issuer info from mock-oauth2
     issuer_result = juju.run(f"{MOCK_OAUTH2}/0", "get-issuer-info")

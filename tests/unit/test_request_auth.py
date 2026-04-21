@@ -177,3 +177,52 @@ def test_sync_deny_auth_policy(
             assert raw_policies[0].spec["action"] == "DENY"
         else:
             assert len(raw_policies) == 0
+
+
+@patch.object(IstioIngressCharm, "_get_request_auth_resource_manager")
+def test_sync_request_authentication_blocks_on_malformed_apps(mock_get_krm, istio_ingress_context):
+    """Test that sync returns malformed apps and reconciles empty when any app has invalid rules."""
+    mock_krm = MagicMock()
+    mock_get_krm.return_value = mock_krm
+
+    # Create a relation with an empty databag (connected but no valid jwt_rules)
+    malformed_relation = scenario.Relation(
+        endpoint="istio-request-auth",
+        interface="istio_request_auth",
+        remote_app_data={},
+    )
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(relations=[malformed_relation], leader=True),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        malformed_apps = charm._sync_request_authentication()
+
+        assert malformed_apps is not None
+        assert len(malformed_apps) == 1
+        mock_krm.reconcile.assert_called_once_with([])
+
+
+@patch.object(IstioIngressCharm, "_get_request_auth_resource_manager")
+def test_sync_request_authentication_blocks_when_mix_of_valid_and_malformed(mock_get_krm, istio_ingress_context):
+    """Test that even one malformed app causes all RequestAuth resources to be cleared."""
+    mock_krm = MagicMock()
+    mock_get_krm.return_value = mock_krm
+
+    valid_relation = _make_request_auth_relation()
+    malformed_relation = scenario.Relation(
+        endpoint="istio-request-auth",
+        interface="istio_request_auth",
+        remote_app_name="malformed-app",
+        remote_app_data={},
+    )
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(relations=[valid_relation, malformed_relation], leader=True),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        malformed_apps = charm._sync_request_authentication()
+
+        assert malformed_apps is not None
+        assert "malformed-app" in malformed_apps
+        mock_krm.reconcile.assert_called_once_with([])
