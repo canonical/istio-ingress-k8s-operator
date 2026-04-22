@@ -2,15 +2,8 @@ output "app_name" {
   value = juju_application.this_app.name
 }
 
-output "endpoints" {
+output "provides" {
   value = {
-    # Requires
-    certificates     = "certificates"
-    charm-tracing    = "charm-tracing"
-    forward-auth     = "forward-auth"
-    upstream-ingress = "upstream-ingress"
-
-    # Provides
     ingress                             = "ingress"
     ingress-unauthenticated             = "ingress-unauthenticated"
     metrics-endpoint                    = "metrics-endpoint"
@@ -18,5 +11,14 @@ output "endpoints" {
     istio-ingress-route                 = "istio-ingress-route"
     istio-ingress-route-unauthenticated = "istio-ingress-route-unauthenticated"
     gateway-metadata                    = "gateway-metadata"
+  }
+}
+
+output "requires" {
+  value = {
+    certificates     = "certificates"
+    charm-tracing    = "charm-tracing"
+    forward-auth     = "forward-auth"
+    upstream-ingress = "upstream-ingress"
   }
 }
