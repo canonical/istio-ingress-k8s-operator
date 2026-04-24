@@ -17,9 +17,18 @@ from canonical_service_mesh.models.istio import (
     JWTRule,
     RequestAuthenticationSpec,
 )
+
+# Request-auth resources use canonical_service_mesh models (has notRequestPrincipals etc.)
+# until we fully migrate all auth policy models to canonical_service_mesh we will use aliasing.
 from canonical_service_mesh.models.istio import (
-    PolicyTargetReference as RequestAuthenticationTargetRef,  # alias until we fully migrate to canonical_service_mesh.
+    AuthorizationPolicySpec as RequestAuthorizationPolicySpec,
 )
+from canonical_service_mesh.models.istio import From as RequestAuthFrom
+from canonical_service_mesh.models.istio import (
+    PolicyTargetReference as RequestAuthenticationTargetRef,
+)
+from canonical_service_mesh.models.istio import Rule as RequestAuthRule
+from canonical_service_mesh.models.istio import Source as RequestAuthSource
 from charmed_service_mesh_helpers import (
     Action,
     AuthorizationPolicySpec,
@@ -845,11 +854,15 @@ class IstioIngressCharm(CharmBase):
                 name=f"deny-without-jwt-{self.app.name}",
                 namespace=self.model.name,
             ),
-            spec=AuthorizationPolicySpec(
+            spec=RequestAuthorizationPolicySpec(
                 action=Action.deny,
-                rules=[Rule(from_=[From(source=Source(notRequestPrincipals=["*"]))])],  # type: ignore
+                rules=[
+                    RequestAuthRule(
+                        from_=[RequestAuthFrom(source=RequestAuthSource(notRequestPrincipals=["*"]))]
+                    )
+                ],
                 targetRefs=[
-                    PolicyTargetReference(
+                    RequestAuthenticationTargetRef(
                         kind="Gateway",
                         group="gateway.networking.k8s.io",
                         name=self.app.name,
