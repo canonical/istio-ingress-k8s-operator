@@ -20,8 +20,7 @@ parts:
       - jsonschema
       - pydantic>=2
       - charmed-service-mesh-helpers
-      # TODO: replace with released package once charmlibs istio-request-auth is published to PyPI
-      - charmlibs-interfaces-istio-request-auth @ git+https://github.com/adhityaravi/charmlibs@feat/add-istio-request-auth-lib#subdirectory=interfaces/istio-request-auth
+      - charmlibs-interfaces-istio-request-auth
 
 
 requires:

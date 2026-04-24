@@ -54,13 +54,17 @@ wheels = [
 
 [[package]]
 name = "canonical-service-mesh"
-version = "0.0.0.dev0"
-source = { git = "https://github.com/canonical/service-mesh?subdirectory=canonical_service_mesh&rev=feat%2Flib-migration#939c49794780ce3ee199470ec5b0f1b428fd89da" }
+version = "0.0.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
     { name = "lightkube" },
     { name = "ops" },
     { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/9d/c8/160769d7e8297f6888029abc53dd3107241f9867ec52fd838e06bdb2d694/canonical_service_mesh-0.0.1.tar.gz", hash = "sha256:d271e6c326060540a1aa05fd6ff57b5f8199f54a3aac9871209e5e812980b5e3", size = 67323, upload-time = "2026-04-24T12:44:53.2Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/ca/00/8134f6d30f0d8ccd137f15be768ea5513912d595eb601ed7206ea3a4a411/canonical_service_mesh-0.0.1-py3-none-any.whl", hash = "sha256:f764455f965efbf3048cf8879ad09dd1c3f7fc0b4cc3215c14e3f201bd7b04c7", size = 28317, upload-time = "2026-04-24T12:44:51.691Z" },
 ]
 
 [[package]]
@@ -156,20 +160,28 @@ wheels = [
 
 [[package]]
 name = "charmed-service-mesh-helpers"
-version = "999.999.999"
-source = { git = "https://github.com/canonical/charmed-service-mesh-helpers?rev=feat%2FSMS-642-adds-request-auth-interface#d2fbe96085c2d65a74e0e305ffe7b88055d38d54" }
+version = "0.6.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ops" },
     { name = "pydantic" },
 ]
+sdist = { url = "https://files.pythonhosted.org/packages/b9/b1/01f400a87af69198f90abfd74d4f9e53878fb015e6ccb61ebbc4370dcf6b/charmed_service_mesh_helpers-0.6.0.tar.gz", hash = "sha256:2a606679c467c68744d439641aa8fe9fc533eebfaea97fc3662e87266fd0d786", size = 16869, upload-time = "2026-03-17T12:19:59Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/b9/57/f3432cace60a3116bb7f9b98aae42638278777da3fdf78aa49e974d43920/charmed_service_mesh_helpers-0.6.0-py3-none-any.whl", hash = "sha256:7160e5c1585efd2e369ccc6257c8e5964bbc52bce21a053ccba010e29b1fb12a", size = 16436, upload-time = "2026-03-17T12:19:59.667Z" },
+]
 
 [[package]]
 name = "charmlibs-interfaces-istio-request-auth"
-version = "0.0.0.dev0"
-source = { git = "https://github.com/adhityaravi/charmlibs?subdirectory=interfaces%2Fistio-request-auth&rev=feat%2Fadd-istio-request-auth-lib#035cc85cac864fe18857efa9d433af26863aad35" }
+version = "0.0.1"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "ops" },
     { name = "pydantic" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/ad/92/d97fa2a340c79b46a29be7b99fafe05c7f08c165f736a92e7e7158106a17/charmlibs_interfaces_istio_request_auth-0.0.1.tar.gz", hash = "sha256:e325a8f1483885c9220cf71de4a6528ed7c4397688b4ea79f4e9a846cd56b960", size = 28486, upload-time = "2026-04-24T02:59:01.156Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/19/6d/8407d90ac4fb80116312028ffb8e056bfd3e31e1d6ff64ed17c5f3ff9555/charmlibs_interfaces_istio_request_auth-0.0.1-py3-none-any.whl", hash = "sha256:73dfea0068c4c43532a2c45606d26e335daf9af792b016b0033a88a1724344d0", size = 6863, upload-time = "2026-04-24T02:58:59.416Z" },
 ]
 
 [[package]]
@@ -731,9 +743,9 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "canonical-service-mesh", git = "https://github.com/canonical/service-mesh?subdirectory=canonical_service_mesh&rev=feat%2Flib-migration" },
-    { name = "charmed-service-mesh-helpers", git = "https://github.com/canonical/charmed-service-mesh-helpers?rev=feat%2FSMS-642-adds-request-auth-interface" },
-    { name = "charmlibs-interfaces-istio-request-auth", git = "https://github.com/adhityaravi/charmlibs?subdirectory=interfaces%2Fistio-request-auth&rev=feat%2Fadd-istio-request-auth-lib" },
+    { name = "canonical-service-mesh" },
+    { name = "charmed-service-mesh-helpers" },
+    { name = "charmlibs-interfaces-istio-request-auth" },
     { name = "cosl" },
     { name = "coverage", extras = ["toml"], marker = "extra == 'dev'" },
     { name = "cryptography", specifier = "~=42.0.0" },

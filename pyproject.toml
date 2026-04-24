@@ -9,9 +9,9 @@ dependencies = [
     "pydantic>=2",
     "lightkube-extensions",
     "cosl",
-    "charmed-service-mesh-helpers @ git+https://github.com/canonical/charmed-service-mesh-helpers@feat/SMS-642-adds-request-auth-interface",
-    "charmlibs-interfaces-istio-request-auth @ git+https://github.com/adhityaravi/charmlibs@feat/add-istio-request-auth-lib#subdirectory=interfaces/istio-request-auth",
-    "canonical-service-mesh @ git+https://github.com/canonical/service-mesh@feat/lib-migration#subdirectory=canonical_service_mesh",
+    "charmed-service-mesh-helpers",
+    "charmlibs-interfaces-istio-request-auth",
+    "canonical-service-mesh",
     "cryptography~=42.0.0", # Deps: tls_certificates_interface libs
     "opentelemetry-exporter-otlp-proto-http==1.21.0", # PYDEPS: lib/charms/tempo_coordinator_k8s/v0/charm_tracing.py
     "jsonschema>=4.22.0", # Deps: traefik_k8s libs, tls_certificates_interface libs
