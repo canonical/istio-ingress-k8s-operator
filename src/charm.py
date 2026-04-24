@@ -11,17 +11,18 @@ import time
 from typing import Any, Dict, List, Optional, cast
 from urllib.parse import urlparse
 
-from canonical_service_mesh.models.istio import (
-    ClaimToHeader,
-    FromHeader,
-    JWTRule,
-    RequestAuthenticationSpec,
-)
+from canonical_service_mesh.enums import Action as RequestAuthAction
 
 # Request-auth resources use canonical_service_mesh models (has notRequestPrincipals etc.)
 # until we fully migrate all auth policy models to canonical_service_mesh we will use aliasing.
 from canonical_service_mesh.models.istio import (
     AuthorizationPolicySpec as RequestAuthorizationPolicySpec,
+)
+from canonical_service_mesh.models.istio import (
+    ClaimToHeader,
+    FromHeader,
+    JWTRule,
+    RequestAuthenticationSpec,
 )
 from canonical_service_mesh.models.istio import From as RequestAuthFrom
 from canonical_service_mesh.models.istio import (
@@ -855,10 +856,10 @@ class IstioIngressCharm(CharmBase):
                 namespace=self.model.name,
             ),
             spec=RequestAuthorizationPolicySpec(
-                action=Action.deny,
+                action=RequestAuthAction.deny,
                 rules=[
                     RequestAuthRule(
-                        from_=[RequestAuthFrom(source=RequestAuthSource(notRequestPrincipals=["*"]))]
+                        from_=[RequestAuthFrom(source=RequestAuthSource(notRequestPrincipals=["*"]))]  # type: ignore[call-arg]
                     )
                 ],
                 targetRefs=[
