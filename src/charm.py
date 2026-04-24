@@ -727,6 +727,7 @@ class IstioIngressCharm(CharmBase):
         """Synchronize all resources including authentication, gateway, ingress, and certificates.
 
         Flow:
+        * Create a list of events (soft blockers) that do not break the flow but set a blocked state at the end.
         * Check authentication configuration.
         * Publish or clear the auth_decisions_address in ingress-config, if related.
         * If auth relation exists but no decisions address, set to blocked and remove gateway.
@@ -742,10 +743,14 @@ class IstioIngressCharm(CharmBase):
         * Set up the proxy service.
         * Update forward auth relation data with ingressed apps.
         * Request certificate inspection.
+        * Set the final status based on soft blockers.
         """
         if not self.unit.is_leader():
             self.unit.status = ActiveStatus("Backup unit; standing by for leader takeover")
             return
+
+        # Create a list of events (soft blockers) that do not break the flow but set a blocked state at the end.
+        soft_blockers = []
 
         # Check authentication configuration.
         auth_decisions_address = self._get_oauth_decisions_address()
@@ -793,9 +798,10 @@ class IstioIngressCharm(CharmBase):
         valid_grpc_routes, grpc_apps_to_clear = deduplicate_grpc_routes(istio_grpc_routes)  # ipa relation doesnt support grpc routes.
 
         # Clear conflicts from original structures (needed for publishing back to apps)
-        # TODO: Capture a BlockedStatus here if there's duplicates
-        #  (https://github.com/canonical/istio-ingress-k8s-operator/issues/57)
         all_apps_to_clear = http_apps_to_clear | grpc_apps_to_clear
+        logger.error(str(all_apps_to_clear))
+        if len(all_apps_to_clear) > 0:
+            soft_blockers.append("Route conflict detected. Check the logs for more information.")
         clear_conflicting_routes(
             application_route_data, istio_ingress_route_configs, all_apps_to_clear
         )
@@ -877,6 +883,13 @@ class IstioIngressCharm(CharmBase):
             "Requesting CertHandler inspect certs to decide if our CSR has changed and we should re-request"
         )
         self.on.refresh_certs.emit()
+
+        # Set the final status based on soft blockers
+        self._set_final_status(soft_blockers)
+
+    def _set_final_status(self,soft_blockers):
+        if len(soft_blockers) > 0:
+            self.unit.status = BlockedStatus(str(soft_blockers[0]))
 
     def _get_oauth_decisions_address(self) -> Optional[str]:
         """Retrieve the auth configuration decisions_address if it exists.

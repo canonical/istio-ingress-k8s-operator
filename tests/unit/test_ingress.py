@@ -9,7 +9,7 @@ from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     RequestRedirectFilter,
     RequestRedirectSpec,
 )
-from ops import ActiveStatus
+from ops import ActiveStatus, BlockedStatus
 
 from charm import IstioIngressCharm
 from models import (
@@ -481,7 +481,7 @@ def test_get_unauthenticated_paths(application_route_data, unauthenticated_paths
 
 
 @pytest.mark.parametrize(
-    "ingress_relations, expected_ingress_data_sent",
+    "ingress_relations, expected_ingress_data_sent, expected_final_status",
     [
         # Apps related to this charm on both ingress relations
         (
@@ -498,6 +498,7 @@ def test_get_unauthenticated_paths(application_route_data, unauthenticated_paths
                 {"ingress": json.dumps({"url": "http://example.com/remote-model0-remote-app0"})},
                 {"ingress": json.dumps({"url": "http://example.com/remote-model1-remote-app1"})},
             ),
+            ActiveStatus,
         ),
         # App is related to us on multiple ingress endpoints, requiring deduplication
         (
@@ -517,6 +518,7 @@ def test_get_unauthenticated_paths(application_route_data, unauthenticated_paths
                 {},  # removed because it is a duplicate
                 {},  # removed because it is a duplicate
             ),
+            BlockedStatus,
         ),
     ],
 )
@@ -529,6 +531,7 @@ def test_ingress_e2e(
     _mock_is_ready,
     ingress_relations,
     expected_ingress_data_sent,
+    expected_final_status,
     istio_ingress_charm,
     istio_ingress_context,
 ):
@@ -558,7 +561,7 @@ def test_ingress_e2e(
     for i, relation in enumerate(ingress_relations):
         assert state_out.get_relation(relation.id).local_app_data == expected_ingress_data_sent[i]
 
-    assert isinstance(state_out.unit_status, ActiveStatus)
+    assert isinstance(state_out.unit_status, expected_final_status)
 
 
 def test_construct_grpc_destination_rules(istio_ingress_charm, istio_ingress_context):
