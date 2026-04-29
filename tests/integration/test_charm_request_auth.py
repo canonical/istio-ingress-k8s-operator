@@ -53,7 +53,7 @@ resources = {
 }
 
 IPA_TESTER = "ra-tester"
-IPA_TESTER_2 = "ra-tester-2"
+IPA_TESTER_2 = "ra-tester-two"
 MOCK_OAUTH2 = "mock-oauth2"
 REQUEST_AUTH_RELATION = "istio-request-auth"
 DENY_POLICY_NAME = f"deny-without-jwt-{APP_NAME}"
