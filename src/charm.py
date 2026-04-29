@@ -8,7 +8,7 @@ import ipaddress
 import logging
 import re
 import time
-from typing import Any, Dict, List, Optional, cast
+from typing import Any, Dict, List, Optional, Tuple, cast
 from urllib.parse import urlparse
 
 from charmed_service_mesh_helpers import (
@@ -54,7 +54,7 @@ from lightkube.resources.core_v1 import Secret, Service
 from lightkube.types import PatchType
 from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
 from lightkube_extensions.types import AuthorizationPolicy
-from ops import BlockedStatus, main
+from ops import BlockedStatus, CollectStatusEvent, main
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, MaintenanceStatus
 from ops.pebble import ChangeError, Layer
@@ -158,6 +158,10 @@ class IstioIngressCharm(CharmBase):
 
     def __init__(self, *args):
         super().__init__(*args)
+
+        # display a status based on the current state
+        self.framework.observe(self.on.collect_unit_status, self._on_collect_status)
+
         # Add a custom event that we can emit to request a cert refresh
         self.on.define_event("refresh_certs", RefreshCerts)
 
@@ -534,18 +538,7 @@ class IstioIngressCharm(CharmBase):
         return ingress_address.hostname or ingress_address.ip
 
     def _is_ready(self) -> bool:
-        if not self._is_deployment_ready():
-            self.unit.status = BlockedStatus(
-                "Gateway k8s deployment not ready, is istio properly installed?"
-            )
-            return False
-        if not self._is_load_balancer_ready():
-            self.unit.status = BlockedStatus(
-                "Gateway load balancer is unable to obtain an IP or hostname from the cluster."
-            )
-            return False
-
-        return True
+        return self._is_deployment_ready() and self._is_load_balancer_ready()
 
     def _construct_gateway_tls_secret(self):
         """Return the TLS secret resource for the gateway if TLS is configured, otherwise None."""
@@ -723,7 +716,26 @@ class IstioIngressCharm(CharmBase):
             ),
         )
 
-    def _sync_all_resources(self):
+    def _is_tls_enabled(self) -> bool:
+        return self._construct_gateway_tls_secret() is not None
+
+    def _get_normalized_istio_routes(self) -> Tuple[List[HTTPRoute],List[GRPCRoute]]:
+        """Return the normalized Istio routes."""
+        is_tls_enabled = self._is_tls_enabled()
+        istio_ingress_route_configs = self._get_istio_ingress_route_configs()
+        istio_http_routes = normalize_istio_ingress_route_http_routes(
+            istio_ingress_route_configs, is_tls_enabled, self.app.name
+        )
+        istio_grpc_routes = normalize_istio_ingress_route_grpc_routes(
+            istio_ingress_route_configs, is_tls_enabled, self.app.name
+        )
+        return istio_http_routes, istio_grpc_routes
+
+    def _get_normalized_ipa_routes(self) -> List[HTTPRoute]:
+        """Return the normalized IPA routes from both sources."""
+        return normalize_ipa_routes(self._get_routes(), self._is_tls_enabled(), self.app.name)
+
+    def _sync_all_resources(self) -> None:
         """Synchronize all resources including authentication, gateway, ingress, and certificates.
 
         Flow:
@@ -734,7 +746,7 @@ class IstioIngressCharm(CharmBase):
         * Fetch route and listeners information from the istio-ingress-route relation.
         * Aggregate and deduplicate the routes and listeners from all supported ingress relations.
         * Synchronize external authorization configuration.
-            - If missing valid ingress-config relation when auth is provided, set to blocked and remove gateway.
+            - If missing valid ingress-config relation when auth is provided, remove gateway.
         * Reconcile HPA and gateway resources to align replicas with unit count and ensure gateway readiness.
         * Validate the external hostname.
         * Synchronize ingress resources.
@@ -744,7 +756,6 @@ class IstioIngressCharm(CharmBase):
         * Request certificate inspection.
         """
         if not self.unit.is_leader():
-            self.unit.status = ActiveStatus("Backup unit; standing by for leader takeover")
             return
 
         # Check authentication configuration.
@@ -755,11 +766,8 @@ class IstioIngressCharm(CharmBase):
         if self.model.get_relation(INGRESS_CONFIG_RELATION):
             self._publish_to_istio_ingress_config_relation(auth_decisions_address, forward_auth_headers)
 
-        # If auth relation exists but no decisions address, set to blocked and remove gateway.
+        # If auth relation exists but no decisions address, remove gateway.
         if self.model.get_relation(FORWARD_AUTH_RELATION) and not auth_decisions_address:
-            self.unit.status = BlockedStatus(
-                "Authentication configuration incomplete; ingress is disabled."
-            )
             self._remove_gateway_resources()
             return
 
@@ -768,9 +776,7 @@ class IstioIngressCharm(CharmBase):
         istio_ingress_route_configs = self._get_istio_ingress_route_configs()
 
         # Normalize data to common intermediate formats
-        tls_secret = self._construct_gateway_tls_secret()
-        is_tls_enabled = tls_secret is not None
-        tls_secret_name = self._certificate_secret_name if is_tls_enabled else None
+        tls_secret_name = self._certificate_secret_name if self._is_tls_enabled() else None
 
         # Normalize listeners from both sources
         ipa_listeners = normalize_ipa_listeners(tls_secret_name)
@@ -779,13 +785,8 @@ class IstioIngressCharm(CharmBase):
         )
 
         # Normalize routes from both sources
-        ipa_http_routes = normalize_ipa_routes(application_route_data, is_tls_enabled, self.app.name)
-        istio_http_routes = normalize_istio_ingress_route_http_routes(
-            istio_ingress_route_configs, is_tls_enabled, self.app.name
-        )
-        istio_grpc_routes = normalize_istio_ingress_route_grpc_routes(
-            istio_ingress_route_configs, is_tls_enabled, self.app.name
-        )
+        ipa_http_routes = self._get_normalized_ipa_routes()
+        istio_http_routes, istio_grpc_routes = self._get_normalized_istio_routes()
 
         # Merge and deduplicate using source-agnostic functions
         unique_listeners = deduplicate_listeners(ipa_listeners + istio_listeners)
@@ -793,8 +794,6 @@ class IstioIngressCharm(CharmBase):
         valid_grpc_routes, grpc_apps_to_clear = deduplicate_grpc_routes(istio_grpc_routes)  # ipa relation doesnt support grpc routes.
 
         # Clear conflicts from original structures (needed for publishing back to apps)
-        # TODO: Capture a BlockedStatus here if there's duplicates
-        #  (https://github.com/canonical/istio-ingress-k8s-operator/issues/57)
         all_apps_to_clear = http_apps_to_clear | grpc_apps_to_clear
         clear_conflicting_routes(
             application_route_data, istio_ingress_route_configs, all_apps_to_clear
@@ -810,9 +809,6 @@ class IstioIngressCharm(CharmBase):
 
         # Synchronize external authorization configuration.
         if not self.ingress_config.is_ready() and auth_decisions_address:
-            self.unit.status = BlockedStatus(
-                "Ingress configuration relation missing, yet valid authentication configuration are provided."
-            )
             self._remove_gateway_resources()
             return
         self._sync_ext_authz_auth_policy(auth_decisions_address, unauthenticated_paths)
@@ -821,15 +817,11 @@ class IstioIngressCharm(CharmBase):
         # Reconcile HPA and gateway resources
 
         self._sync_gateway_resources(unique_listeners)
-        self.unit.status = MaintenanceStatus("Validating gateway readiness")
         if not self._is_ready():
             return
 
         # Validate external hostname.
         if not self._ingress_url:
-            self.unit.status = BlockedStatus(
-                "Invalid hostname provided, Please ensure this adheres to RFC 1123."
-            )
             return
 
         # Update upstream ingress relation with current host, port, and scheme.
@@ -846,8 +838,7 @@ class IstioIngressCharm(CharmBase):
             )
         except ApiError as e:
             logger.error("Ingress sync failed: %s", e)
-            self.unit.status = BlockedStatus("Issue with setting up an ingress")
-            return
+            raise e
 
         # Publish route information to ingressed applications (IPA)
         self._publish_routes_to_ingressed_applications(application_route_data)
@@ -865,8 +856,6 @@ class IstioIngressCharm(CharmBase):
                 ForwardAuthRequirerConfig(ingress_app_names=ingressed_apps)
             )
 
-        self.unit.status = ActiveStatus(f"Serving at {self._ingress_url}")
-
         # Publish gateway metadata to related charms
         self._publish_gateway_metadata()
 
@@ -877,6 +866,81 @@ class IstioIngressCharm(CharmBase):
             "Requesting CertHandler inspect certs to decide if our CSR has changed and we should re-request"
         )
         self.on.refresh_certs.emit()
+
+    def _on_collect_status(self, event: CollectStatusEvent):
+        """Decide on the current unit status.
+
+        It calls a list of status collector functions. The collection process stops once a collector
+        returns True to prevent invalid or unneccessary checks.
+        """
+        status_collectors = [
+           self._collect_leadership_status,
+           self._collect_auth_decisions_status,
+           self._collect_route_collision_status,
+           self._collect_external_authorization_status,
+           self._collect_readiness_status,
+           self._collect_external_hostname_status,
+        ]
+        for collector in status_collectors:
+            should_stop = collector(event)
+            if should_stop:
+                break
+        event.add_status(ActiveStatus(f"Serving at {self._ingress_url}"))
+
+    def _collect_leadership_status(self, event: CollectStatusEvent):
+        """Non-leader units are considered active."""
+        if not self.unit.is_leader():
+            event.add_status(ActiveStatus("Backup unit; standing by for leader takeover"))
+            return True
+
+    def _collect_auth_decisions_status(self, event: CollectStatusEvent):
+        """Set to blocked if auth relation exists but no decisions address."""
+        auth_decisions_address = self._get_oauth_decisions_address()
+        if self.model.get_relation(FORWARD_AUTH_RELATION) and not auth_decisions_address:
+            blocked_status = BlockedStatus("Authentication configuration incomplete; ingress is disabled.")
+            event.add_status(blocked_status)
+            return True
+
+    def _collect_route_collision_status(self, event: CollectStatusEvent):
+        """Set to blocked if routes have been removed."""
+        if self._are_routes_removed():
+            blocked_status = BlockedStatus("Route conflict detected. Check the logs for more information.")
+            event.add_status(blocked_status)
+            return True
+
+    def _are_routes_removed(self) -> bool:
+        """Return if there are routes removed because of collision."""
+        ipa_http_routes = self._get_normalized_ipa_routes()
+        istio_http_routes, istio_grpc_routes = self._get_normalized_istio_routes()
+        _, http_apps_to_clear = deduplicate_http_routes(ipa_http_routes + istio_http_routes)
+        _, grpc_apps_to_clear = deduplicate_grpc_routes(istio_grpc_routes)
+        all_apps_to_clear = http_apps_to_clear | grpc_apps_to_clear
+        return len(all_apps_to_clear) > 0
+
+    def _collect_external_authorization_status(self, event: CollectStatusEvent):
+        """Block if Ingress configuration relation missing, but valid authentication configuration are provided."""
+        auth_decisions_address = self._get_oauth_decisions_address()
+        if not self.ingress_config.is_ready() and auth_decisions_address:
+            blocked_status = BlockedStatus("Ingress configuration relation missing, yet valid authentication configuration are provided.")
+            event.add_status(blocked_status)
+            return True
+
+    def _collect_readiness_status(self, event: CollectStatusEvent):
+        """Set to maintenance if not ready, or to blocked in special cases."""
+        if self._is_ready():
+            return
+        event.add_status(MaintenanceStatus("Validating gateway readiness"))
+        if not self._is_deployment_ready():
+            event.add_status(BlockedStatus("Gateway k8s deployment not ready, is istio properly installed?"))
+        if not self._is_load_balancer_ready():
+            event.add_status(BlockedStatus("Gateway load balancer is unable to obtain an IP or hostname from the cluster."))
+        return True
+
+    def _collect_external_hostname_status(self, event: CollectStatusEvent):
+        """Block on invalid external hostname."""
+        if not self._ingress_url:
+            event.add_status(BlockedStatus("Invalid hostname provided, Please ensure this adheres to RFC 1123."))
+            return True
 
     def _get_oauth_decisions_address(self) -> Optional[str]:
         """Retrieve the auth configuration decisions_address if it exists.
