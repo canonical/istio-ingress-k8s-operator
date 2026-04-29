@@ -11,9 +11,30 @@ import time
 from typing import Any, Dict, List, Optional, cast
 from urllib.parse import urlparse
 
+from canonical_service_mesh.enums import Action as RequestAuthAction
+
+# Request-auth resources use canonical_service_mesh models (has notRequestPrincipals etc.)
+# until we fully migrate all auth policy models to canonical_service_mesh we will use aliasing.
+from canonical_service_mesh.models.istio import (
+    AuthorizationPolicySpec as RequestAuthorizationPolicySpec,
+)
+from canonical_service_mesh.models.istio import (
+    ClaimToHeader,
+    FromHeader,
+    JWTRule,
+    RequestAuthenticationSpec,
+)
+from canonical_service_mesh.models.istio import Condition as RequestAuthCondition
+from canonical_service_mesh.models.istio import From as RequestAuthFrom
+from canonical_service_mesh.models.istio import (
+    PolicyTargetReference as RequestAuthenticationTargetRef,
+)
+from canonical_service_mesh.models.istio import Rule as RequestAuthRule
+from canonical_service_mesh.models.istio import Source as RequestAuthSource
 from charmed_service_mesh_helpers import (
     Action,
     AuthorizationPolicySpec,
+    Condition,
     From,
     Operation,
     PolicyTargetReference,
@@ -24,6 +45,7 @@ from charmed_service_mesh_helpers import (
     WorkloadSelector,
 )
 from charmed_service_mesh_helpers.interfaces import GatewayMetadata, GatewayMetadataProvider
+from charmlibs.interfaces.istio_request_auth import IstioRequestAuthProvider
 from charms.istio_beacon_k8s.v0.service_mesh import MeshType, PolicyResourceManager
 from charms.istio_ingress_k8s.v0.istio_ingress_route import IstioIngressRouteProvider
 from charms.istio_k8s.v0.istio_ingress_config import (
@@ -121,6 +143,9 @@ RESOURCE_TYPES = {
     "DestinationRule": create_namespaced_resource(
         "networking.istio.io", "v1", "DestinationRule", "destinationrules"
     ),
+    "RequestAuthentication": create_namespaced_resource(
+        "security.istio.io", "v1", "RequestAuthentication", "requestauthentications"
+    ),
 }
 
 GATEWAY_RESOURCE_TYPES = {RESOURCE_TYPES["Gateway"], Secret, HorizontalPodAutoscaler}
@@ -131,6 +156,7 @@ INGRESS_RESOURCE_TYPES = {
 }
 
 GRPC_DESTINATION_RULE_RESOURCE_TYPES = {RESOURCE_TYPES["DestinationRule"]}
+REQUEST_AUTH_RESOURCE_TYPES = {RESOURCE_TYPES["RequestAuthentication"]}
 
 GATEWAY_SCOPE = "istio-gateway"
 INGRESS_SCOPE = "istio-ingress"
@@ -138,9 +164,12 @@ INGRESS_AUTH_POLICY_SCOPE = "istio-ingress-authorization-policy"
 EXTZ_AUTH_POLICY_SCOPE = "external-authorizer-authorization-policy"
 EXTERNAL_TRAFFIC_AUTH_POLICY_SCOPE = "external-traffic-authorization-policy"
 GRPC_DESTINATION_RULE_SCOPE = "grpc-destination-rule"
+REQUEST_AUTH_SCOPE = "request-authentication"
+DENY_AUTH_POLICY_SCOPE = "deny-without-jwt-authorization-policy"
 
 INGRESS_CONFIG_RELATION = "istio-ingress-config"
 FORWARD_AUTH_RELATION = "forward-auth"
+REQUEST_AUTH_RELATION = "istio-request-auth"
 UPSTREAM_INGRESS_RELATION = "upstream-ingress"
 PEERS_RELATION = "peers"
 
@@ -227,6 +256,10 @@ class IstioIngressCharm(CharmBase):
             self,
             relation_name="gateway-metadata",
         )
+        self.request_auth_provider = IstioRequestAuthProvider(
+            self,
+            relation_name=REQUEST_AUTH_RELATION,
+        )
         self.framework.observe(self.on.config_changed, self._on_config_changed)
         self.framework.observe(self.on.start, self._on_start)
         self.framework.observe(self.forward_auth.on.auth_config_changed, self._handle_auth_config)
@@ -258,6 +291,12 @@ class IstioIngressCharm(CharmBase):
         self.framework.observe(self.on[PEERS_RELATION].relation_departed, self._on_peers_changed)
         self.framework.observe(
             self.on["gateway-metadata"].relation_changed, self._on_gateway_metadata_relation_changed
+        )
+        self.framework.observe(
+            self.on[REQUEST_AUTH_RELATION].relation_changed, self._on_request_auth_changed
+        )
+        self.framework.observe(
+            self.on[REQUEST_AUTH_RELATION].relation_broken, self._on_request_auth_changed
         )
         self.framework.observe(
             self.upstream_ingress.on.ready, self._handle_upstream_ingress_changed
@@ -389,6 +428,28 @@ class IstioIngressCharm(CharmBase):
             logger=logger,
         )
 
+    def _get_request_auth_resource_manager(self):
+        """Get KubernetesResourceManager for RequestAuthentication resources."""
+        return KubernetesResourceManager(
+            labels=create_charm_default_labels(
+                self.app.name, self.model.name, scope=REQUEST_AUTH_SCOPE
+            ),
+            resource_types=REQUEST_AUTH_RESOURCE_TYPES,  # pyright: ignore
+            lightkube_client=self.lightkube_client,
+            logger=logger,
+        )
+
+    def _get_deny_auth_policy_resource_manager(self):
+        """Get PolicyResourceManager for the DENY-without-JWT authorization policy."""
+        return PolicyResourceManager(
+            charm=self,
+            lightkube_client=self.lightkube_client,
+            labels=create_charm_default_labels(
+                self.app.name, self.model.name, scope=DENY_AUTH_POLICY_SCOPE
+            ),
+            logger=logger,
+        )
+
     def _on_cert_handler_cert_changed(self, _):
         """Event handler for when tls certificates have changed."""
         self._sync_all_resources()
@@ -419,6 +480,10 @@ class IstioIngressCharm(CharmBase):
 
     def _on_gateway_metadata_relation_changed(self, _):
         """Event handler for gateway-metadata relation events."""
+        self._sync_all_resources()
+
+    def _on_request_auth_changed(self, _):
+        """Event handler for request-auth relation events."""
         self._sync_all_resources()
 
     def _on_remove(self, _):
@@ -453,6 +518,12 @@ class IstioIngressCharm(CharmBase):
 
         prm_external_traffic_authz = self._get_external_traffic_auth_policy_resource_manager()
         prm_external_traffic_authz.delete()
+
+        krm_request_auth = self._get_request_auth_resource_manager()
+        krm_request_auth.delete()
+
+        prm_deny_auth = self._get_deny_auth_policy_resource_manager()
+        prm_deny_auth.delete()
 
     def _on_ingress_data_provided(self, _):
         """Handle a unit providing data requesting IPU."""
@@ -655,12 +726,20 @@ class IstioIngressCharm(CharmBase):
         self, ext_authz_provider_name: str, unauthenticated_paths: List[str]
     ):
         """Return an AuthorizationPolicy that applies authentication to all paths except unauthenticated_paths."""
+        # When request-auth is active, skip ext-authz for requests with a Bearer token
+        when_conditions = None
+        if self.request_auth_provider.is_ready:
+            when_conditions = [
+                Condition(key="request.headers[authorization]", notValues=["Bearer *"])
+            ]
+
         if unauthenticated_paths:
             auth_rule = Rule(
                 to=[To(operation=Operation(notPaths=unauthenticated_paths))],
+                when=when_conditions,
             )
         else:
-            auth_rule = Rule()
+            auth_rule = Rule(when=when_conditions)
 
         return AuthorizationPolicy(
             metadata=ObjectMeta(
@@ -722,6 +801,144 @@ class IstioIngressCharm(CharmBase):
                 maxReplicas=unit_count,
             ),
         )
+
+    def _convert_to_jwt_rules(self, interface_jwt_rules: list) -> List[JWTRule]:
+        """Convert interface JWTRule models to Istio CRD JWTRule models."""
+        istio_jwt_rules = []
+        for rule in interface_jwt_rules:
+            claim_to_headers = None
+            if rule.claim_to_headers:
+                claim_to_headers = [
+                    ClaimToHeader(header=c.header, claim=c.claim) for c in rule.claim_to_headers
+                ]
+
+            from_headers = None
+            if rule.from_headers:
+                from_headers = [
+                    FromHeader(name=h.name, prefix=h.prefix) for h in rule.from_headers
+                ]
+
+            istio_jwt_rules.append(
+                JWTRule(
+                    issuer=rule.issuer,
+                    jwksUri=rule.jwks_uri,
+                    audiences=rule.audiences,
+                    forwardOriginalToken=rule.forward_original_token,
+                    outputClaimToHeaders=claim_to_headers,
+                    fromHeaders=from_headers,
+                )
+            )
+        return istio_jwt_rules
+
+    def _construct_request_authentication(self, app_name: str, jwt_rules: List[JWTRule]):
+        """Construct a RequestAuthentication resource for a related app."""
+        return RESOURCE_TYPES["RequestAuthentication"](
+            metadata=ObjectMeta(
+                name=f"request-auth-{app_name}-{self.app.name}",
+                namespace=self.model.name,
+            ),
+            spec=RequestAuthenticationSpec(
+                targetRefs=[
+                    RequestAuthenticationTargetRef(
+                        kind="Gateway",
+                        group="gateway.networking.k8s.io",
+                        name=self.app.name,
+                    )
+                ],
+                jwtRules=jwt_rules,
+            ).model_dump(by_alias=True, exclude_unset=True, exclude_none=True),
+        )
+
+    def _construct_deny_without_jwt_policy(self, bearer_only: bool = False):
+        """Construct a DENY policy that rejects requests without a validated JWT principal.
+
+        Args:
+            bearer_only: When True, the DENY policy only applies to requests carrying a Bearer
+                token.  This is used when forward-auth is active so that non-Bearer requests
+                continue to flow through ext-authz while Bearer requests that bypass ext-authz
+                are still caught by the DENY rule.
+        """
+        when_conditions = None
+        if bearer_only:
+            when_conditions = [
+                RequestAuthCondition(
+                    key="request.headers[authorization]", values=["Bearer *"]
+                )
+            ]
+
+        return AuthorizationPolicy(
+            metadata=ObjectMeta(
+                name=f"deny-without-jwt-{self.app.name}",
+                namespace=self.model.name,
+            ),
+            spec=RequestAuthorizationPolicySpec(
+                action=RequestAuthAction.deny,
+                rules=[
+                    RequestAuthRule(
+                        from_=[RequestAuthFrom(source=RequestAuthSource(notRequestPrincipals=["*"]))],  # type: ignore[call-arg]
+                        when=when_conditions,
+                    )
+                ],
+                targetRefs=[
+                    RequestAuthenticationTargetRef(
+                        kind="Gateway",
+                        group="gateway.networking.k8s.io",
+                        name=self.app.name,
+                    )
+                ],
+            ).model_dump(by_alias=True, exclude_unset=True, exclude_none=True),
+        )
+
+    def _sync_request_authentication(self):
+        """Reconcile RequestAuthentication resources from request-auth relations.
+
+        Creates RequestAuthentication resources only for apps with valid JWT rules.
+        Apps with malformed or missing data are logged and skipped — security is enforced
+        by the DENY policy which blocks requests without a validated JWT principal.
+        """
+        krm = self._get_request_auth_resource_manager()
+
+        connected_apps = self.request_auth_provider.get_connected_apps()
+        valid_data = self.request_auth_provider.get_data()
+        malformed_apps = connected_apps - set(valid_data.keys())
+
+        for app_name in sorted(malformed_apps):
+            logger.error(
+                "Application %s is connected over istio-request-auth "
+                "but has not provided valid jwt_rules",
+                app_name,
+            )
+
+        resources = []
+        for app_name, interface_jwt_rules in valid_data.items():
+            jwt_rules = self._convert_to_jwt_rules(interface_jwt_rules)
+            resources.append(self._construct_request_authentication(app_name, jwt_rules))
+
+        krm.reconcile(resources)
+
+    def _sync_deny_auth_policy(self):
+        """Reconcile the DENY-without-JWT authorization policy.
+
+        The DENY policy is created whenever any application is connected over the
+        istio-request-auth relation, regardless of whether the data is valid.  This
+        ensures fail-closed behaviour: malformed apps cannot leave the gateway open.
+
+        When forward-auth (ext-authz) is also active the DENY policy is scoped to
+        Bearer-token requests only so that non-Bearer requests continue to be handled
+        by ext-authz.
+        """
+        policy_manager = self._get_deny_auth_policy_resource_manager()
+        resources = []
+
+        has_request_auth = bool(self.request_auth_provider.get_connected_apps())
+        has_forward_auth = bool(self._get_oauth_decisions_address())
+
+        if has_request_auth:
+            resources.append(
+                self._construct_deny_without_jwt_policy(bearer_only=has_forward_auth)
+            )
+
+        policy_manager.reconcile(policies=[], mesh_type=MeshType.istio, raw_policies=resources)
 
     def _sync_all_resources(self):
         """Synchronize all resources including authentication, gateway, ingress, and certificates.
@@ -817,6 +1034,8 @@ class IstioIngressCharm(CharmBase):
             return
         self._sync_ext_authz_auth_policy(auth_decisions_address, unauthenticated_paths)
         self._sync_external_traffic_auth_policy()
+        self._sync_request_authentication()
+        self._sync_deny_auth_policy()
 
         # Reconcile HPA and gateway resources
 
