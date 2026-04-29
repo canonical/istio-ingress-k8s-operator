@@ -3,7 +3,6 @@
 import json
 from unittest.mock import MagicMock, patch
 
-import pytest
 import scenario
 from canonical_service_mesh.models.istio import JWTRule
 from charmlibs.interfaces.istio_request_auth import JWTRule as InterfaceJWTRule
@@ -11,7 +10,11 @@ from charmlibs.interfaces.istio_request_auth import JWTRule as InterfaceJWTRule
 from charm import IstioIngressCharm
 
 
-def _make_request_auth_relation(issuer="https://issuer.example.com", jwks_uri="https://issuer.example.com/jwks"):
+def _make_request_auth_relation(
+    issuer="https://issuer.example.com",
+    jwks_uri="https://issuer.example.com/jwks",
+    remote_app_name="remote",
+):
     """Create an istio-request-auth relation with JWT rule data in the remote app databag."""
     rules = [
         InterfaceJWTRule(
@@ -23,8 +26,37 @@ def _make_request_auth_relation(issuer="https://issuer.example.com", jwks_uri="h
     return scenario.Relation(
         endpoint="istio-request-auth",
         interface="istio_request_auth",
+        remote_app_name=remote_app_name,
         remote_app_data={"jwt_rules": json.dumps(rules)},
     )
+
+
+def _make_malformed_request_auth_relation(remote_app_name="malformed-app"):
+    """Create an istio-request-auth relation with an empty databag (no valid jwt_rules)."""
+    return scenario.Relation(
+        endpoint="istio-request-auth",
+        interface="istio_request_auth",
+        remote_app_name=remote_app_name,
+        remote_app_data={},
+    )
+
+
+def _make_forward_auth_relation():
+    """Create a forward-auth relation with a decisions address."""
+    return scenario.Relation(
+        endpoint="forward-auth",
+        interface="forward_auth",
+        remote_app_data={
+            "decisions_address": "http://auth-service:80",
+            "app_names": json.dumps(["my-app"]),
+            "headers": json.dumps([]),
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Construction helpers
+# ---------------------------------------------------------------------------
 
 
 def test_construct_request_authentication(istio_ingress_context):
@@ -65,6 +97,26 @@ def test_construct_deny_without_jwt_policy(istio_ingress_context):
         assert policy.spec["action"] == "DENY"
         assert policy.spec["targetRefs"][0]["kind"] == "Gateway"
         assert policy.spec["rules"][0]["from"][0]["source"]["notRequestPrincipals"] == ["*"]
+        # No 'when' condition by default
+        assert "when" not in policy.spec["rules"][0]
+
+
+def test_construct_deny_without_jwt_policy_bearer_only(istio_ingress_context):
+    """Test that bearer_only=True scopes the DENY policy to Bearer-token requests."""
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(leader=True),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        policy = charm._construct_deny_without_jwt_policy(bearer_only=True)
+
+        assert policy.spec["action"] == "DENY"
+        assert policy.spec["rules"][0]["from"][0]["source"]["notRequestPrincipals"] == ["*"]
+        # 'when' condition scopes to Bearer requests only
+        when = policy.spec["rules"][0]["when"]
+        assert len(when) == 1
+        assert when[0]["key"] == "request.headers[authorization]"
+        assert when[0]["values"] == ["Bearer *"]
 
 
 def test_convert_to_jwt_rules(istio_ingress_context):
@@ -91,9 +143,14 @@ def test_convert_to_jwt_rules(istio_ingress_context):
         assert jwt_rules[0].forwardOriginalToken is True
 
 
+# ---------------------------------------------------------------------------
+# _sync_request_authentication
+# ---------------------------------------------------------------------------
+
+
 @patch.object(IstioIngressCharm, "_get_request_auth_resource_manager")
-def test_sync_request_authentication_with_data(mock_get_krm, istio_ingress_context):
-    """Test that sync creates RA resources when relation data exists."""
+def test_sync_ra_with_valid_data(mock_get_krm, istio_ingress_context):
+    """Valid relation data produces a RequestAuthentication resource."""
     mock_krm = MagicMock()
     mock_get_krm.return_value = mock_krm
 
@@ -112,8 +169,8 @@ def test_sync_request_authentication_with_data(mock_get_krm, istio_ingress_conte
 
 
 @patch.object(IstioIngressCharm, "_get_request_auth_resource_manager")
-def test_sync_request_authentication_without_data(mock_get_krm, istio_ingress_context):
-    """Test that sync reconciles empty when no relation exists."""
+def test_sync_ra_without_relation(mock_get_krm, istio_ingress_context):
+    """No relation means reconcile with an empty list."""
     mock_krm = MagicMock()
     mock_get_krm.return_value = mock_krm
 
@@ -127,42 +184,139 @@ def test_sync_request_authentication_without_data(mock_get_krm, istio_ingress_co
         mock_krm.reconcile.assert_called_once_with([])
 
 
-@pytest.mark.parametrize(
-    "has_request_auth, has_forward_auth, expect_deny_policy",
-    [
-        (True, False, True),
-        (True, True, False),
-        (False, False, False),
-    ],
-)
+@patch.object(IstioIngressCharm, "_get_request_auth_resource_manager")
+def test_sync_ra_malformed_reconciles_empty(mock_get_krm, istio_ingress_context):
+    """Malformed app data produces no RA resources (fail-closed via DENY policy)."""
+    mock_krm = MagicMock()
+    mock_get_krm.return_value = mock_krm
+
+    malformed_relation = _make_malformed_request_auth_relation()
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(relations=[malformed_relation], leader=True),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        charm._sync_request_authentication()
+
+        mock_krm.reconcile.assert_called_once_with([])
+
+
+@patch.object(IstioIngressCharm, "_get_request_auth_resource_manager")
+def test_sync_ra_mixed_creates_ra_for_valid_only(mock_get_krm, istio_ingress_context):
+    """Mixed valid and malformed apps: RA is created only for the valid app."""
+    mock_krm = MagicMock()
+    mock_get_krm.return_value = mock_krm
+
+    valid_relation = _make_request_auth_relation()
+    malformed_relation = _make_malformed_request_auth_relation()
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(relations=[valid_relation, malformed_relation], leader=True),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        charm._sync_request_authentication()
+
+        mock_krm.reconcile.assert_called_once()
+        resources = mock_krm.reconcile.call_args[0][0]
+        assert len(resources) == 1
+        assert resources[0].spec["jwtRules"][0]["issuer"] == "https://issuer.example.com"
+
+
+# ---------------------------------------------------------------------------
+# _sync_deny_auth_policy – without forward-auth
+# ---------------------------------------------------------------------------
+
+
 @patch.object(IstioIngressCharm, "_get_deny_auth_policy_resource_manager")
-def test_sync_deny_auth_policy(
-    mock_get_prm,
-    has_request_auth,
-    has_forward_auth,
-    expect_deny_policy,
-    istio_ingress_context,
-):
-    """Test deny policy is only created when request-auth is active and forward-auth is absent."""
+def test_deny_policy_no_relation(mock_get_prm, istio_ingress_context):
+    """No request-auth relation → no DENY policy."""
     mock_prm = MagicMock()
     mock_get_prm.return_value = mock_prm
 
-    relations = []
-    if has_request_auth:
-        relations.append(_make_request_auth_relation())
-    if has_forward_auth:
-        relations.append(
-            scenario.Relation(
-                endpoint="forward-auth",
-                interface="forward_auth",
-                remote_app_data={
-                    "decisions_address": "http://auth-service:80",
-                    "app_names": json.dumps(["my-app"]),
-                    "headers": json.dumps([]),
-                },
-            )
-        )
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(leader=True),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        charm._sync_deny_auth_policy()
 
+        raw_policies = mock_prm.reconcile.call_args[1]["raw_policies"]
+        assert len(raw_policies) == 0
+
+
+@patch.object(IstioIngressCharm, "_get_deny_auth_policy_resource_manager")
+def test_deny_policy_valid_data_no_forward_auth(mock_get_prm, istio_ingress_context):
+    """Valid request-auth, no forward-auth → DENY policy for all requests (no when)."""
+    mock_prm = MagicMock()
+    mock_get_prm.return_value = mock_prm
+
+    relation = _make_request_auth_relation()
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(relations=[relation], leader=True),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        charm._sync_deny_auth_policy()
+
+        raw_policies = mock_prm.reconcile.call_args[1]["raw_policies"]
+        assert len(raw_policies) == 1
+        assert raw_policies[0].spec["action"] == "DENY"
+        assert "when" not in raw_policies[0].spec["rules"][0]
+
+
+@patch.object(IstioIngressCharm, "_get_deny_auth_policy_resource_manager")
+def test_deny_policy_malformed_data_no_forward_auth(mock_get_prm, istio_ingress_context):
+    """Malformed request-auth, no forward-auth → DENY policy still created (fail-closed)."""
+    mock_prm = MagicMock()
+    mock_get_prm.return_value = mock_prm
+
+    malformed_relation = _make_malformed_request_auth_relation()
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(relations=[malformed_relation], leader=True),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        charm._sync_deny_auth_policy()
+
+        raw_policies = mock_prm.reconcile.call_args[1]["raw_policies"]
+        assert len(raw_policies) == 1
+        assert raw_policies[0].spec["action"] == "DENY"
+        assert "when" not in raw_policies[0].spec["rules"][0]
+
+
+@patch.object(IstioIngressCharm, "_get_deny_auth_policy_resource_manager")
+def test_deny_policy_mixed_data_no_forward_auth(mock_get_prm, istio_ingress_context):
+    """Mixed valid/malformed request-auth, no forward-auth → DENY policy for all requests."""
+    mock_prm = MagicMock()
+    mock_get_prm.return_value = mock_prm
+
+    valid_relation = _make_request_auth_relation()
+    malformed_relation = _make_malformed_request_auth_relation()
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(relations=[valid_relation, malformed_relation], leader=True),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        charm._sync_deny_auth_policy()
+
+        raw_policies = mock_prm.reconcile.call_args[1]["raw_policies"]
+        assert len(raw_policies) == 1
+        assert raw_policies[0].spec["action"] == "DENY"
+        assert "when" not in raw_policies[0].spec["rules"][0]
+
+
+# ---------------------------------------------------------------------------
+# _sync_deny_auth_policy – with forward-auth
+# ---------------------------------------------------------------------------
+
+
+@patch.object(IstioIngressCharm, "_get_deny_auth_policy_resource_manager")
+def test_deny_policy_valid_data_with_forward_auth(mock_get_prm, istio_ingress_context):
+    """Valid request-auth + forward-auth → DENY policy scoped to Bearer requests only."""
+    mock_prm = MagicMock()
+    mock_get_prm.return_value = mock_prm
+
+    relations = [_make_request_auth_relation(), _make_forward_auth_relation()]
     with istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(relations=relations, leader=True),
@@ -170,59 +324,75 @@ def test_sync_deny_auth_policy(
         charm: IstioIngressCharm = manager.charm
         charm._sync_deny_auth_policy()
 
-        mock_prm.reconcile.assert_called_once()
         raw_policies = mock_prm.reconcile.call_args[1]["raw_policies"]
-        if expect_deny_policy:
-            assert len(raw_policies) == 1
-            assert raw_policies[0].spec["action"] == "DENY"
-        else:
-            assert len(raw_policies) == 0
+        assert len(raw_policies) == 1
+        assert raw_policies[0].spec["action"] == "DENY"
+        when = raw_policies[0].spec["rules"][0]["when"]
+        assert when[0]["key"] == "request.headers[authorization]"
+        assert when[0]["values"] == ["Bearer *"]
 
 
-@patch.object(IstioIngressCharm, "_get_request_auth_resource_manager")
-def test_sync_request_authentication_blocks_on_malformed_apps(mock_get_krm, istio_ingress_context):
-    """Test that sync returns malformed apps and reconciles empty when any app has invalid rules."""
-    mock_krm = MagicMock()
-    mock_get_krm.return_value = mock_krm
+@patch.object(IstioIngressCharm, "_get_deny_auth_policy_resource_manager")
+def test_deny_policy_malformed_data_with_forward_auth(mock_get_prm, istio_ingress_context):
+    """Malformed request-auth + forward-auth → DENY policy scoped to Bearer (fail-closed)."""
+    mock_prm = MagicMock()
+    mock_get_prm.return_value = mock_prm
 
-    # Create a relation with an empty databag (connected but no valid jwt_rules)
-    malformed_relation = scenario.Relation(
-        endpoint="istio-request-auth",
-        interface="istio_request_auth",
-        remote_app_data={},
-    )
+    relations = [_make_malformed_request_auth_relation(), _make_forward_auth_relation()]
     with istio_ingress_context(
         istio_ingress_context.on.update_status(),
-        state=scenario.State(relations=[malformed_relation], leader=True),
+        state=scenario.State(relations=relations, leader=True),
     ) as manager:
         charm: IstioIngressCharm = manager.charm
-        malformed_apps = charm._sync_request_authentication()
+        charm._sync_deny_auth_policy()
 
-        assert malformed_apps is not None
-        assert len(malformed_apps) == 1
-        mock_krm.reconcile.assert_called_once_with([])
+        raw_policies = mock_prm.reconcile.call_args[1]["raw_policies"]
+        assert len(raw_policies) == 1
+        assert raw_policies[0].spec["action"] == "DENY"
+        when = raw_policies[0].spec["rules"][0]["when"]
+        assert when[0]["key"] == "request.headers[authorization]"
+        assert when[0]["values"] == ["Bearer *"]
 
 
-@patch.object(IstioIngressCharm, "_get_request_auth_resource_manager")
-def test_sync_request_authentication_blocks_when_mix_of_valid_and_malformed(mock_get_krm, istio_ingress_context):
-    """Test that even one malformed app causes all RequestAuth resources to be cleared."""
-    mock_krm = MagicMock()
-    mock_get_krm.return_value = mock_krm
+@patch.object(IstioIngressCharm, "_get_deny_auth_policy_resource_manager")
+def test_deny_policy_mixed_data_with_forward_auth(mock_get_prm, istio_ingress_context):
+    """Mixed request-auth + forward-auth → DENY policy scoped to Bearer."""
+    mock_prm = MagicMock()
+    mock_get_prm.return_value = mock_prm
 
-    valid_relation = _make_request_auth_relation()
-    malformed_relation = scenario.Relation(
-        endpoint="istio-request-auth",
-        interface="istio_request_auth",
-        remote_app_name="malformed-app",
-        remote_app_data={},
-    )
+    relations = [
+        _make_request_auth_relation(),
+        _make_malformed_request_auth_relation(),
+        _make_forward_auth_relation(),
+    ]
     with istio_ingress_context(
         istio_ingress_context.on.update_status(),
-        state=scenario.State(relations=[valid_relation, malformed_relation], leader=True),
+        state=scenario.State(relations=relations, leader=True),
     ) as manager:
         charm: IstioIngressCharm = manager.charm
-        malformed_apps = charm._sync_request_authentication()
+        charm._sync_deny_auth_policy()
 
-        assert malformed_apps is not None
-        assert "malformed-app" in malformed_apps
-        mock_krm.reconcile.assert_called_once_with([])
+        raw_policies = mock_prm.reconcile.call_args[1]["raw_policies"]
+        assert len(raw_policies) == 1
+        assert raw_policies[0].spec["action"] == "DENY"
+        when = raw_policies[0].spec["rules"][0]["when"]
+        assert when[0]["key"] == "request.headers[authorization]"
+        assert when[0]["values"] == ["Bearer *"]
+
+
+@patch.object(IstioIngressCharm, "_get_deny_auth_policy_resource_manager")
+def test_deny_policy_no_request_auth_with_forward_auth(mock_get_prm, istio_ingress_context):
+    """Forward-auth only (no request-auth) → no DENY policy."""
+    mock_prm = MagicMock()
+    mock_get_prm.return_value = mock_prm
+
+    relations = [_make_forward_auth_relation()]
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(relations=relations, leader=True),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        charm._sync_deny_auth_policy()
+
+        raw_policies = mock_prm.reconcile.call_args[1]["raw_policies"]
+        assert len(raw_policies) == 0

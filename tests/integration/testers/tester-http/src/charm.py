@@ -53,6 +53,7 @@ class HTTPTesterCharm(CharmBase):
 
         self.framework.observe(self.on.echo_server_pebble_ready, self._on_pebble_ready)
         self.framework.observe(self.on.set_request_auth_action, self._on_set_request_auth)
+        self.framework.observe(self.on.clear_request_auth_action, self._on_clear_request_auth)
         self.framework.observe(
             self.istio_ingress_route.on.ready, self._on_istio_ingress_route_ready
         )
@@ -154,6 +155,12 @@ class HTTPTesterCharm(CharmBase):
             forward_original_token=event.params.get("forward-original-token", True),
         )
         self.request_auth.publish_data([jwt_rule])
+        event.set_results({"result": "ok"})
+
+    def _on_clear_request_auth(self, event):
+        """Clear JWT rules from the request-auth relation databag."""
+        for relation in self.model.relations.get("istio-request-auth", []):
+            relation.data[self.app].clear()
         event.set_results({"result": "ok"})
 
 

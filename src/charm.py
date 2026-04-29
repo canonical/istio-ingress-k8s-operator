@@ -24,6 +24,7 @@ from canonical_service_mesh.models.istio import (
     JWTRule,
     RequestAuthenticationSpec,
 )
+from canonical_service_mesh.models.istio import Condition as RequestAuthCondition
 from canonical_service_mesh.models.istio import From as RequestAuthFrom
 from canonical_service_mesh.models.istio import (
     PolicyTargetReference as RequestAuthenticationTargetRef,
@@ -848,8 +849,23 @@ class IstioIngressCharm(CharmBase):
             ).model_dump(by_alias=True, exclude_unset=True, exclude_none=True),
         )
 
-    def _construct_deny_without_jwt_policy(self):
-        """Construct a DENY policy that rejects requests without a validated JWT principal."""
+    def _construct_deny_without_jwt_policy(self, bearer_only: bool = False):
+        """Construct a DENY policy that rejects requests without a validated JWT principal.
+
+        Args:
+            bearer_only: When True, the DENY policy only applies to requests carrying a Bearer
+                token.  This is used when forward-auth is active so that non-Bearer requests
+                continue to flow through ext-authz while Bearer requests that bypass ext-authz
+                are still caught by the DENY rule.
+        """
+        when_conditions = None
+        if bearer_only:
+            when_conditions = [
+                RequestAuthCondition(
+                    key="request.headers[authorization]", values=["Bearer *"]
+                )
+            ]
+
         return AuthorizationPolicy(
             metadata=ObjectMeta(
                 name=f"deny-without-jwt-{self.app.name}",
@@ -859,7 +875,8 @@ class IstioIngressCharm(CharmBase):
                 action=RequestAuthAction.deny,
                 rules=[
                     RequestAuthRule(
-                        from_=[RequestAuthFrom(source=RequestAuthSource(notRequestPrincipals=["*"]))]  # type: ignore[call-arg]
+                        from_=[RequestAuthFrom(source=RequestAuthSource(notRequestPrincipals=["*"]))],  # type: ignore[call-arg]
+                        when=when_conditions,
                     )
                 ],
                 targetRefs=[
@@ -872,14 +889,12 @@ class IstioIngressCharm(CharmBase):
             ).model_dump(by_alias=True, exclude_unset=True, exclude_none=True),
         )
 
-    def _sync_request_authentication(self) -> Optional[set[str]]:
+    def _sync_request_authentication(self):
         """Reconcile RequestAuthentication resources from request-auth relations.
 
-        If any connected app has invalid or missing JWT rules, no RequestAuthentication
-        resources are created.
-
-        Returns:
-            None if all apps are valid, or the set of app names with malformed JWT rules.
+        Creates RequestAuthentication resources only for apps with valid JWT rules.
+        Apps with malformed or missing data are logged and skipped — security is enforced
+        by the DENY policy which blocks requests without a validated JWT principal.
         """
         krm = self._get_request_auth_resource_manager()
 
@@ -887,19 +902,12 @@ class IstioIngressCharm(CharmBase):
         valid_data = self.request_auth_provider.get_data()
         malformed_apps = connected_apps - set(valid_data.keys())
 
-        # If an application is requesting a RequestAuthentication but has not provided valid JWT rules -
-        #  1. Log an error for that application
-        #  2. Do not create any RequestAuthentication resources - this is for security reasons
-        #  3. Return the set of malformed applications so that we can capture a BlockedStatus
-        if malformed_apps:
-            for app_name in sorted(malformed_apps):
-                logger.error(
-                    "Application %s is connected over istio-request-auth "
-                    "but has not provided valid jwt_rules",
-                    app_name,
-                )
-            krm.reconcile([])
-            return malformed_apps
+        for app_name in sorted(malformed_apps):
+            logger.error(
+                "Application %s is connected over istio-request-auth "
+                "but has not provided valid jwt_rules",
+                app_name,
+            )
 
         resources = []
         for app_name, interface_jwt_rules in valid_data.items():
@@ -909,15 +917,26 @@ class IstioIngressCharm(CharmBase):
         krm.reconcile(resources)
 
     def _sync_deny_auth_policy(self):
-        """Reconcile the DENY-without-JWT authorization policy."""
+        """Reconcile the DENY-without-JWT authorization policy.
+
+        The DENY policy is created whenever any application is connected over the
+        istio-request-auth relation, regardless of whether the data is valid.  This
+        ensures fail-closed behaviour: malformed apps cannot leave the gateway open.
+
+        When forward-auth (ext-authz) is also active the DENY policy is scoped to
+        Bearer-token requests only so that non-Bearer requests continue to be handled
+        by ext-authz.
+        """
         policy_manager = self._get_deny_auth_policy_resource_manager()
         resources = []
 
-        has_request_auth = self.request_auth_provider.is_ready
+        has_request_auth = bool(self.request_auth_provider.get_connected_apps())
         has_forward_auth = bool(self._get_oauth_decisions_address())
 
-        if has_request_auth and not has_forward_auth:
-            resources.append(self._construct_deny_without_jwt_policy())
+        if has_request_auth:
+            resources.append(
+                self._construct_deny_without_jwt_policy(bearer_only=has_forward_auth)
+            )
 
         policy_manager.reconcile(policies=[], mesh_type=MeshType.istio, raw_policies=resources)
 
@@ -1015,14 +1034,8 @@ class IstioIngressCharm(CharmBase):
             return
         self._sync_ext_authz_auth_policy(auth_decisions_address, unauthenticated_paths)
         self._sync_external_traffic_auth_policy()
-        malformed_request_auth_apps = self._sync_request_authentication()
+        self._sync_request_authentication()
         self._sync_deny_auth_policy()
-
-        if malformed_request_auth_apps:
-            self.unit.status = BlockedStatus(
-                "Invalid jwt_rules on istio-request-auth; check logs for details"
-            )
-            return
 
         # Reconcile HPA and gateway resources
 
