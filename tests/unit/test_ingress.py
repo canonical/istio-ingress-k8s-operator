@@ -224,7 +224,7 @@ def test_sync_ingress_resources(
     mock_auth_manager_factory = MagicMock(return_value=mock_auth_manager)
 
     # Initialize charm in test scenario
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(
             leader=True,
@@ -318,7 +318,7 @@ def test_sync_ingress_resources_with_tls(
     mock_krm = MagicMock()
     mock_krm_factory = MagicMock(return_value=mock_krm)
 
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(
             relations=[generate_certificates_relation(subject="example.com")["relation"]],
@@ -404,7 +404,7 @@ def test_get_routes(
     istio_ingress_context,
 ):
     """Test that .get_routes returns the expected routes for given ingress relations."""
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(
             relations=ingress_relations,
@@ -626,7 +626,7 @@ def test_construct_grpc_destination_rules(istio_ingress_charm, istio_ingress_con
         },
     ]
 
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(leader=True),
     ) as manager:

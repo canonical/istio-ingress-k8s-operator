@@ -46,7 +46,7 @@ def create_test_listeners(
 
 def test_construct_gateway(istio_ingress_charm, istio_ingress_context):
     """Assert that the Gateway definition is constructed as expected."""
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(),
     ) as manager:
@@ -396,7 +396,7 @@ def test_construct_hpa(istio_ingress_charm, istio_ingress_context):
     """Assert that the HPA definition is constructed as expected."""
     n_units = 3
     model_name = "test-model"
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(
             leader=True, planned_units=n_units, model=scenario.Model(name=model_name)
