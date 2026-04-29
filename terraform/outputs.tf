@@ -11,6 +11,7 @@ output "provides" {
     istio-ingress-route                 = "istio-ingress-route"
     istio-ingress-route-unauthenticated = "istio-ingress-route-unauthenticated"
     gateway-metadata                    = "gateway-metadata"
+    istio-request-auth                  = "istio-request-auth"
   }
 }
 
