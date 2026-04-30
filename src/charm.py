@@ -1113,7 +1113,10 @@ class IstioIngressCharm(CharmBase):
             return True
 
     def _collect_auth_decisions_status(self, event: CollectStatusEvent):
-        """Set to blocked if auth relation exists but no decisions address."""
+        """Set to blocked if auth relation exists but no decisions address.
+
+        (Should be called on the leader unit only.)
+        """
         auth_decisions_address = self._get_oauth_decisions_address()
         if self.model.get_relation(FORWARD_AUTH_RELATION) and not auth_decisions_address:
             blocked_status = BlockedStatus("Authentication configuration incomplete; ingress is disabled.")
@@ -1121,7 +1124,10 @@ class IstioIngressCharm(CharmBase):
             return True
 
     def _collect_route_collision_status(self, event: CollectStatusEvent):
-        """Set to blocked if routes have been removed."""
+        """Set to blocked if routes have been removed.
+
+        (Should be called on the leader unit only.)
+        """
         if self._are_routes_removed():
             blocked_status = BlockedStatus("Route conflict detected. Check the logs for more information.")
             event.add_status(blocked_status)
@@ -1137,7 +1143,10 @@ class IstioIngressCharm(CharmBase):
         return len(all_apps_to_clear) > 0
 
     def _collect_external_authorization_status(self, event: CollectStatusEvent):
-        """Block if Ingress configuration relation missing, but valid authentication configuration are provided."""
+        """Block if Ingress configuration relation missing, but valid authentication configuration are provided.
+
+        (Should be called on the leader unit only.)
+        """
         auth_decisions_address = self._get_oauth_decisions_address()
         if not self.ingress_config.is_ready() and auth_decisions_address:
             blocked_status = BlockedStatus("Ingress configuration relation missing, yet valid authentication configuration are provided.")
@@ -1145,7 +1154,10 @@ class IstioIngressCharm(CharmBase):
             return True
 
     def _collect_readiness_status(self, event: CollectStatusEvent):
-        """Set to maintenance if not ready, or to blocked in special cases."""
+        """Set to maintenance if not ready, or to blocked in special cases.
+
+        (Should be called on the leader unit only.)
+        """
         if self._is_ready():
             return
         event.add_status(MaintenanceStatus("Validating gateway readiness"))
@@ -1156,7 +1168,10 @@ class IstioIngressCharm(CharmBase):
         return True
 
     def _collect_external_hostname_status(self, event: CollectStatusEvent):
-        """Block on invalid external hostname."""
+        """Block on invalid external hostname.
+
+        (Should be called on the leader unit only.)
+        """
         if not self._ingress_url:
             event.add_status(BlockedStatus("Invalid hostname provided, Please ensure this adheres to RFC 1123."))
             return True
