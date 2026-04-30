@@ -55,6 +55,12 @@ RESOURCE_TYPES = {
         "AuthorizationPolicy",
         "authorizationpolicies",
     ),
+    "RequestAuthentication": create_namespaced_resource(
+        "security.istio.io",
+        "v1",
+        "RequestAuthentication",
+        "requestauthentications",
+    ),
 }
 
 
@@ -153,6 +159,19 @@ def get_auth_policy_spec(model_name: str, policy_name: str) -> Optional[Dict[str
 
     except Exception as e:
         logger.error("Error retrieving AuthorizationPolicy condition: %s", e, exc_info=True)
+        return None
+
+
+def get_request_auth_spec(model_name: str, ra_name: str) -> Optional[Dict[str, Any]]:
+    """Retrieve the spec of a RequestAuthentication resource."""
+    try:
+        c = lightkube.Client()
+        ra = c.get(
+            RESOURCE_TYPES["RequestAuthentication"], namespace=model_name, name=ra_name
+        )
+        return ra.spec
+    except Exception as e:
+        logger.error("Error retrieving RequestAuthentication: %s", e, exc_info=True)
         return None
 
 

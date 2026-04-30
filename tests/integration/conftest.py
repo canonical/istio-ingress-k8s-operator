@@ -87,6 +87,13 @@ def tester_http_charm():
 
 
 @pytest.fixture(scope="session")
+def tester_mock_oauth2_charm():
+    """Mock OAuth2 server charm used for integration testing."""
+    charm_path = (Path(__file__).parent / "testers" / "tester-mock-oauth2").absolute()
+    return pack(charm_path)
+
+
+@pytest.fixture(scope="session")
 def tester_grpc_charm():
     """GRPC tester charm used for integration testing (istio-ingress-route)."""
     charm_path = (Path(__file__).parent / "testers" / "tester-grpc").absolute()
