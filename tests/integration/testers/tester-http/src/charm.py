@@ -94,11 +94,15 @@ class HTTPTesterCharm(CharmBase):
         """Configure HTTP routes via istio-ingress-route."""
         # Define listener on custom port 8080
         http_listener = Listener(port=8080, protocol=ProtocolType.HTTP)
+        # Second listener on port 9090 to test multi-port auth policy aggregation.
+        # The tester does not serve on this port; we only need to verify that
+        # the ingress charm creates a single AuthorizationPolicy with both ports.
+        extra_listener = Listener(port=9090, protocol=ProtocolType.HTTP)
 
         # Configure multiple HTTP routes for testing
         config = IstioIngressRouteConfig(
             model=self.model.name,
-            listeners=[http_listener],
+            listeners=[http_listener, extra_listener],
             http_routes=[
                 # Route 1: /api path
                 HTTPRoute(
@@ -142,6 +146,17 @@ class HTTPTesterCharm(CharmBase):
                             )
                         )
                     ],
+                ),
+                # Route 4: /extra path on port 9090 — tests multi-port policy aggregation
+                HTTPRoute(
+                    name="extra-port-route",
+                    listener=extra_listener,
+                    matches=[
+                        HTTPRouteMatch(
+                            path=HTTPPathMatch(type=HTTPPathMatchType.PathPrefix, value="/extra")
+                        )
+                    ],
+                    backends=[BackendRef(service=self.app.name, port=9090)],
                 ),
             ],
         )

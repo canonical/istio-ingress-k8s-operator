@@ -8,6 +8,7 @@ import lightkube
 import pytest
 import yaml
 from helpers import (
+    get_auth_policy_spec,
     get_ca_certificate,
     get_grpc_route_condition,
     get_http_response,
@@ -127,9 +128,27 @@ def test_http_routes_validity(juju: Juju):
     rewrite_route_condition = get_route_condition(juju.model, rewrite_route_name)
     assert rewrite_route_condition["conditions"][0]["message"] == "Route was valid"
     assert rewrite_route_condition["conditions"][0]["reason"] == "Accepted"
-    health_route_condition = get_route_condition(juju.model, health_route_name)
-    assert health_route_condition["conditions"][0]["message"] == "Route was valid"
-    assert health_route_condition["conditions"][0]["reason"] == "Accepted"
+
+    # Verify the http-9090 listener exists (extra-port-route from tester-http for multi-port testing)
+    listener_9090_condition = next(
+        (listener for listener in gateway.status["listeners"] if listener["name"] == "http-9090"),
+        None,
+    )
+    listener_9090_spec = next(
+        (listener for listener in gateway.spec["listeners"] if listener["name"] == "http-9090"),
+        None,
+    )
+    assert listener_9090_condition is not None, "Listener http-9090 not found in Gateway status"
+    assert listener_9090_spec is not None, "Listener http-9090 not found in Gateway spec"
+    assert listener_9090_condition["attachedRoutes"] == 1
+    assert listener_9090_spec["port"] == 9090
+    assert listener_9090_spec["protocol"] == "HTTP"
+
+    # Test extra-port-route on port 9090
+    extra_route_name = f"{TESTER_HTTP}-extra-port-route-httproute-http-9090-{APP_NAME}"
+    extra_route_condition = get_route_condition(juju.model, extra_route_name)
+    assert extra_route_condition["conditions"][0]["message"] == "Route was valid"
+    assert extra_route_condition["conditions"][0]["reason"] == "Accepted"
 
 
 @pytest.mark.dependency(
@@ -146,6 +165,36 @@ def test_http_routes_connectivity(juju: Juju):
     # Test /health endpoint
     health_url = f"http://{istio_ingress_address}:8080/health"
     assert send_http_request(health_url), f"Failed to reach {health_url}"
+
+
+@pytest.mark.dependency(
+    name="test_multi_port_auth_policy", depends=["test_http_routes_validity"]
+)
+def test_multi_port_auth_policy(juju: Juju):
+    """Test that a single AuthorizationPolicy is created with all ports for a multi-port backend.
+
+    The tester-http charm requests routes on ports 8080 and 9090 pointing to the same backend
+    service. The ingress charm should aggregate these into a single L4 AuthorizationPolicy
+    containing both ports, rather than creating separate policies that overwrite each other.
+    """
+    policy_name = f"{TESTER_HTTP}-{APP_NAME}-{juju.model}-l4"
+    policy_spec = get_auth_policy_spec(juju.model, policy_name)
+
+    assert policy_spec is not None, f"AuthorizationPolicy '{policy_name}' not found."
+
+    # Validate that both ports are present in a single policy
+    rules = policy_spec["rules"]
+    assert len(rules) == 1, "Expected exactly one rule in AuthorizationPolicy spec."
+
+    ports = rules[0]["to"][0]["operation"]["ports"]
+    assert sorted(ports) == ["8080", "9090"], (
+        f"Expected ports ['8080', '9090'] in AuthorizationPolicy, got {sorted(ports)}. "
+        "Multi-port aggregation may not be working correctly."
+    )
+
+    # Verify selector targets the tester-http app
+    match_labels = policy_spec["selector"]["matchLabels"]
+    assert match_labels.get("app.kubernetes.io/name") == TESTER_HTTP
 
 
 @pytest.mark.dependency(
