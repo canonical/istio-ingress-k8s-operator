@@ -144,7 +144,7 @@ def test_construct_ext_authz_policy(
 ):
     """Test that _construct_ext_authz_policy works correctly with and without unauthenticated paths."""
     # Initialize charm in test scenario
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(
             leader=True,
@@ -193,7 +193,7 @@ def test_construct_external_traffic_auth_policy(
     istio_ingress_context,
 ):
     """Test that _construct_external_traffic_auth_policy creates correct policy with IP blocks."""
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(leader=True),
     ) as manager:

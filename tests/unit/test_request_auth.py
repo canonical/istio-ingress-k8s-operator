@@ -61,7 +61,7 @@ def _make_forward_auth_relation():
 
 def test_construct_request_authentication(istio_ingress_context):
     """Test that RA resource has correct targetRef, issuer, and jwksUri."""
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(leader=True),
     ) as manager:
@@ -86,7 +86,7 @@ def test_construct_request_authentication(istio_ingress_context):
 
 def test_construct_deny_without_jwt_policy(istio_ingress_context):
     """Test that DENY policy uses notRequestPrincipals targeting the Gateway."""
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(leader=True),
     ) as manager:
@@ -103,7 +103,7 @@ def test_construct_deny_without_jwt_policy(istio_ingress_context):
 
 def test_construct_deny_without_jwt_policy_bearer_only(istio_ingress_context):
     """Test that bearer_only=True scopes the DENY policy to Bearer-token requests."""
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(leader=True),
     ) as manager:
@@ -129,7 +129,7 @@ def test_convert_to_jwt_rules(istio_ingress_context):
             forward_original_token=True,
         )
     ]
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(leader=True),
     ) as manager:
@@ -155,7 +155,7 @@ def test_sync_ra_with_valid_data(mock_get_krm, istio_ingress_context):
     mock_get_krm.return_value = mock_krm
 
     relation = _make_request_auth_relation()
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(relations=[relation], leader=True),
     ) as manager:
@@ -174,7 +174,7 @@ def test_sync_ra_without_relation(mock_get_krm, istio_ingress_context):
     mock_krm = MagicMock()
     mock_get_krm.return_value = mock_krm
 
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(leader=True),
     ) as manager:
@@ -191,7 +191,7 @@ def test_sync_ra_malformed_reconciles_empty(mock_get_krm, istio_ingress_context)
     mock_get_krm.return_value = mock_krm
 
     malformed_relation = _make_malformed_request_auth_relation()
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(relations=[malformed_relation], leader=True),
     ) as manager:
@@ -209,7 +209,7 @@ def test_sync_ra_mixed_creates_ra_for_valid_only(mock_get_krm, istio_ingress_con
 
     valid_relation = _make_request_auth_relation()
     malformed_relation = _make_malformed_request_auth_relation()
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(relations=[valid_relation, malformed_relation], leader=True),
     ) as manager:
@@ -233,7 +233,7 @@ def test_deny_policy_no_relation(mock_get_prm, istio_ingress_context):
     mock_prm = MagicMock()
     mock_get_prm.return_value = mock_prm
 
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(leader=True),
     ) as manager:
@@ -251,7 +251,7 @@ def test_deny_policy_valid_data_no_forward_auth(mock_get_prm, istio_ingress_cont
     mock_get_prm.return_value = mock_prm
 
     relation = _make_request_auth_relation()
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(relations=[relation], leader=True),
     ) as manager:
@@ -271,7 +271,7 @@ def test_deny_policy_malformed_data_no_forward_auth(mock_get_prm, istio_ingress_
     mock_get_prm.return_value = mock_prm
 
     malformed_relation = _make_malformed_request_auth_relation()
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(relations=[malformed_relation], leader=True),
     ) as manager:
@@ -292,7 +292,7 @@ def test_deny_policy_mixed_data_no_forward_auth(mock_get_prm, istio_ingress_cont
 
     valid_relation = _make_request_auth_relation()
     malformed_relation = _make_malformed_request_auth_relation()
-    with istio_ingress_context(
+    with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),
         state=scenario.State(relations=[valid_relation, malformed_relation], leader=True),
     ) as manager:
