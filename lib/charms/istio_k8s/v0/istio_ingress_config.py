@@ -91,7 +91,15 @@ LIBID = "12331b5ac41547e087edd7ac993176ed"
 # Default headers for external authorization.
 # These defaults are based on oauth2-proxy requirements and can be used by ingress charms
 # when no headers are provided by the auth provider.
-DEFAULT_INCLUDE_HEADERS_IN_CHECK = ["authorization", "cookie"]
+DEFAULT_INCLUDE_HEADERS_IN_CHECK = [
+    "authorization",
+    "cookie",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-forwarded-uri",
+    "x-forwarded-prefix",
+]
 DEFAULT_HEADERS_TO_UPSTREAM_ON_ALLOW = [
     "authorization",
     "path",
