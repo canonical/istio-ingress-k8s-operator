@@ -550,28 +550,31 @@ class IstioIngressCharm(CharmBase):
         kgm.delete()
 
     def _is_deployment_ready(self) -> bool:
-        """Check if the deployment is ready after 10 attempts."""
+        """Check if the deployment is ready after multiple attempts."""
         timeout = int(self.config["ready-timeout"])
         check_interval = 10
         attempts = timeout // check_interval
 
         for _ in range(attempts):
-            try:
-                deployment = self.lightkube_client.get(
-                    Deployment, name=self.managed_name, namespace=self.model.name
-                )
-                if (
-                    deployment.status
-                    and deployment.status.readyReplicas == deployment.status.replicas
-                ):
-                    return True
-                logger.warning("Deployment not ready, retrying...")
-            except ApiError:
-                logger.warning("Deployment not found, retrying...")
-
+            if self._check_deployment_ready():
+                return True
+            logger.warning("Deployment not ready, retrying...")
             time.sleep(check_interval)
 
         return False
+
+    def _check_deployment_ready(self) -> bool:
+        """Single non-blocking check if the gateway deployment is ready."""
+        try:
+            deployment = self.lightkube_client.get(
+                Deployment, name=self.managed_name, namespace=self.model.name
+            )
+            return bool(
+                deployment.status
+                and deployment.status.readyReplicas == deployment.status.replicas
+            )
+        except ApiError:
+            return False
 
     def _is_load_balancer_ready(self) -> bool:
         """Wait for the LoadBalancer to be created."""
@@ -1087,30 +1090,21 @@ class IstioIngressCharm(CharmBase):
         self.on.refresh_certs.emit()
 
     def _on_collect_status(self, event: CollectStatusEvent):
-        """Decide on the current unit status.
+        """Collect unit status from sub-collectors."""
+        if not self.unit.is_leader():
+            self._collect_leadership_status(event)
+            return
 
-        It calls a list of status collector functions. The collection process stops once a collector
-        returns True to prevent invalid or unneccessary checks.
-        """
-        status_collectors = [
-           self._collect_leadership_status,
-           self._collect_auth_decisions_status,
-           self._collect_route_collision_status,
-           self._collect_external_authorization_status,
-           self._collect_readiness_status,
-           self._collect_external_hostname_status,
-        ]
-        for collector in status_collectors:
-            should_stop = collector(event)
-            if should_stop:
-                break
+        self._collect_auth_decisions_status(event)
+        self._collect_route_collision_status(event)
+        self._collect_external_authorization_status(event)
+        self._collect_readiness_status(event)
+        self._collect_external_hostname_status(event)
         event.add_status(ActiveStatus(f"Serving at {self._ingress_url}"))
 
     def _collect_leadership_status(self, event: CollectStatusEvent):
         """Non-leader units are considered active."""
-        if not self.unit.is_leader():
-            event.add_status(ActiveStatus("Backup unit; standing by for leader takeover"))
-            return True
+        event.add_status(ActiveStatus("Backup unit; standing by for leader takeover"))
 
     def _collect_auth_decisions_status(self, event: CollectStatusEvent):
         """Set to blocked if auth relation exists but no decisions address.
@@ -1119,9 +1113,7 @@ class IstioIngressCharm(CharmBase):
         """
         auth_decisions_address = self._get_oauth_decisions_address()
         if self.model.get_relation(FORWARD_AUTH_RELATION) and not auth_decisions_address:
-            blocked_status = BlockedStatus("Authentication configuration incomplete; ingress is disabled.")
-            event.add_status(blocked_status)
-            return True
+            event.add_status(BlockedStatus("Authentication configuration incomplete; ingress is disabled."))
 
     def _collect_route_collision_status(self, event: CollectStatusEvent):
         """Set to blocked if routes have been removed.
@@ -1129,9 +1121,7 @@ class IstioIngressCharm(CharmBase):
         (Should be called on the leader unit only.)
         """
         if self._are_routes_removed():
-            blocked_status = BlockedStatus("Route conflict detected. Check the logs for more information.")
-            event.add_status(blocked_status)
-            return True
+            event.add_status(BlockedStatus("Route conflict detected. Check the logs for more information."))
 
     def _are_routes_removed(self) -> bool:
         """Return if there are routes removed because of collision."""
@@ -1149,23 +1139,24 @@ class IstioIngressCharm(CharmBase):
         """
         auth_decisions_address = self._get_oauth_decisions_address()
         if not self.ingress_config.is_ready() and auth_decisions_address:
-            blocked_status = BlockedStatus("Ingress configuration relation missing, yet valid authentication configuration are provided.")
-            event.add_status(blocked_status)
-            return True
+            event.add_status(BlockedStatus("Ingress configuration relation missing, yet valid authentication configuration are provided."))
 
     def _collect_readiness_status(self, event: CollectStatusEvent):
-        """Set to maintenance if not ready, or to blocked in special cases.
+        """Set to maintenance/blocked if gateway resources are not ready.
 
-        (Should be called on the leader unit only.)
+        Uses non-blocking single checks to avoid blocking the charm agent.
         """
-        if self._is_ready():
+        deployment_ready = self._check_deployment_ready()
+        lb_ready = bool(self._get_lb_external_address)
+
+        if deployment_ready and lb_ready:
             return
+
         event.add_status(MaintenanceStatus("Validating gateway readiness"))
-        if not self._is_deployment_ready():
+        if not deployment_ready:
             event.add_status(BlockedStatus("Gateway k8s deployment not ready, is istio properly installed?"))
-        if not self._is_load_balancer_ready():
+        if not lb_ready:
             event.add_status(BlockedStatus("Gateway load balancer is unable to obtain an IP or hostname from the cluster."))
-        return True
 
     def _collect_external_hostname_status(self, event: CollectStatusEvent):
         """Block on invalid external hostname.
@@ -1174,7 +1165,6 @@ class IstioIngressCharm(CharmBase):
         """
         if not self._ingress_url:
             event.add_status(BlockedStatus("Invalid hostname provided, Please ensure this adheres to RFC 1123."))
-            return True
 
     def _get_oauth_decisions_address(self) -> Optional[str]:
         """Retrieve the auth configuration decisions_address if it exists.
