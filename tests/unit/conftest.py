@@ -27,7 +27,10 @@ def mock_lightkube_client():
             with patch.object(Client, "get"):
                 with patch.object(Client, "patch"):
                     with patch.object(Client, "list"):
-                        yield
+                        with patch.object(
+                            IstioIngressCharm, "_check_deployment_ready", return_value=True
+                        ):
+                            yield
 
 @pytest.fixture()
 def istio_ingress_charm():

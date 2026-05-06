@@ -17,9 +17,16 @@ from helpers import (
 )
 from jubilant import Juju, all_active, all_blocked
 
-# Expected default header values (based on oauth2-proxy requirements)
-# These must match the defaults defined in lib/charms/istio_k8s/v0/istio_ingress_config.py
-EXPECTED_INCLUDE_HEADERS_IN_CHECK = ["authorization", "cookie"]
+# Expected default header values — must match DEFAULT_* in lib/charms/istio_k8s/v0/istio_ingress_config.py
+EXPECTED_INCLUDE_HEADERS_IN_CHECK = [
+    "authorization",
+    "cookie",
+    "x-forwarded-for",
+    "x-forwarded-host",
+    "x-forwarded-proto",
+    "x-forwarded-uri",
+    "x-forwarded-prefix",
+]
 EXPECTED_HEADERS_TO_DOWNSTREAM_ON_ALLOW = ["set-cookie"]
 EXPECTED_HEADERS_TO_DOWNSTREAM_ON_DENY = ["content-type", "set-cookie"]
 
