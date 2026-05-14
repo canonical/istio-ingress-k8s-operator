@@ -687,7 +687,7 @@ class IstioIngressCharm(CharmBase):
         )
 
     def _construct_auth_policy_from_ingress_to_target(
-        self, target_name: str, target_namespace: str, target_port: int
+        self, target_name: str, target_namespace: str, target_ports: List[int]
     ):
         """Return an AuthorizationPolicy that allows the ingress workload to communicate with the target workload."""
         return AuthorizationPolicy(
@@ -698,7 +698,7 @@ class IstioIngressCharm(CharmBase):
             spec=AuthorizationPolicySpec(
                 rules=[
                     Rule(
-                        to=[To(operation=Operation(ports=[str(target_port)]))],
+                        to=[To(operation=Operation(ports=[str(p) for p in sorted(target_ports)]))],
                         from_=[  # type: ignore # this is accessible via an alias "from"
                             # The ServiceAccount that is used to deploy the Gateway (ingress) workload
                             From(
@@ -1503,7 +1503,7 @@ class IstioIngressCharm(CharmBase):
         """Construct L4 authorization policies from normalized routes.
 
         This method is fully source-agnostic - extracts backend info from normalized routes.
-        Creates one auth policy per unique (service, port, namespace) backend.
+        Creates one auth policy per unique (service, namespace) backend, aggregating all ports.
 
         Args:
             http_routes: List of normalized HTTP routes
@@ -1512,38 +1512,27 @@ class IstioIngressCharm(CharmBase):
         Returns:
             List of AuthorizationPolicy lightkube resources
         """
-        auth_policies = []
-        seen_backends = set()
+        # Collect all ports per (service, namespace) backend
+        backend_ports: dict = {}
 
-        # Process HTTP routes - extract backends from backend_refs field
         for route in http_routes:
             for backend_ref in route["backend_refs"]:
-                backend_key = (backend_ref.name, backend_ref.port, backend_ref.namespace)
-                if backend_key not in seen_backends:
-                    seen_backends.add(backend_key)
-                    auth_policies.append(
-                        self._construct_auth_policy_from_ingress_to_target(
-                            target_name=backend_ref.name,
-                            target_namespace=backend_ref.namespace,
-                            target_port=backend_ref.port,
-                        )
-                    )
+                key = (backend_ref.name, backend_ref.namespace)
+                backend_ports.setdefault(key, set()).add(backend_ref.port)
 
-        # Process gRPC routes - extract backends from backend_refs field
         for route in grpc_routes:
             for backend_ref in route["backend_refs"]:
-                backend_key = (backend_ref.name, backend_ref.port, backend_ref.namespace)
-                if backend_key not in seen_backends:
-                    seen_backends.add(backend_key)
-                    auth_policies.append(
-                        self._construct_auth_policy_from_ingress_to_target(
-                            target_name=backend_ref.name,
-                            target_namespace=backend_ref.namespace,
-                            target_port=backend_ref.port,
-                        )
-                    )
+                key = (backend_ref.name, backend_ref.namespace)
+                backend_ports.setdefault(key, set()).add(backend_ref.port)
 
-        return auth_policies
+        return [
+            self._construct_auth_policy_from_ingress_to_target(
+                target_name=name,
+                target_namespace=namespace,
+                target_ports=list(ports),
+            )
+            for (name, namespace), ports in backend_ports.items()
+        ]
 
     def _construct_grpc_destination_rules(self, grpc_routes: List[GRPCRoute]) -> List:
         """Construct DestinationRules for gRPC backends.

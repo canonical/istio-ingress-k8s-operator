@@ -104,7 +104,7 @@ def test_construct_ingress_auth_policy(istio_ingress_charm, istio_ingress_contex
     """Test that the _construct_ingress_auth_policy method constructs an Authorization Policy object correctly."""
     target_name = "app-name"
     target_namespace = "app-namespace"
-    target_port = 80
+    target_ports = [80, 443]
 
     with istio_ingress_context(
         istio_ingress_context.on.update_status(),
@@ -114,7 +114,7 @@ def test_construct_ingress_auth_policy(istio_ingress_charm, istio_ingress_contex
         auth_policy = charm._construct_auth_policy_from_ingress_to_target(
             target_name=target_name,
             target_namespace=target_namespace,
-            target_port=target_port,
+            target_ports=target_ports,
         )
 
         # Verify the AuthorizationPolicy resource
@@ -126,7 +126,7 @@ def test_construct_ingress_auth_policy(istio_ingress_charm, istio_ingress_contex
         rule = auth_policy.spec["rules"][0]
 
         # Verify `to` field
-        assert rule["to"] == [{"operation": {"ports": ["80"]}}]
+        assert rule["to"] == [{"operation": {"ports": ["80", "443"]}}]
 
         # Verify `from` field (principals)
         principals = rule["from"][0]["source"]["principals"]
@@ -137,6 +137,149 @@ def test_construct_ingress_auth_policy(istio_ingress_charm, istio_ingress_contex
         assert auth_policy.spec["selector"] == {
             "matchLabels": {"app.kubernetes.io/name": "app-name"}
         }
+
+
+def test_construct_auth_policies_multi_port_aggregation(istio_ingress_charm, istio_ingress_context):
+    """Test that _construct_auth_policies aggregates multiple ports for the same backend into a single policy."""
+    # Create routes that simulate the Tempo scenario: same service, different ports
+    http_routes = [
+        HTTPRoute(
+            name="tempo-api",
+            listener_port=80,
+            listener_protocol="HTTP",
+            namespace="cos",
+            source_app="tempo",
+            source_relation="istio-ingress-route",
+            matches=[
+                HTTPRouteMatch(path=HTTPPathMatch(type="PathPrefix", value="/tempo-api"))
+            ],
+            backend_refs=[BackendRef(name="tempo", port=3200, namespace="cos")],
+            filters=[],
+        ),
+        HTTPRoute(
+            name="tempo-otlp-http",
+            listener_port=80,
+            listener_protocol="HTTP",
+            namespace="cos",
+            source_app="tempo",
+            source_relation="istio-ingress-route",
+            matches=[
+                HTTPRouteMatch(path=HTTPPathMatch(type="PathPrefix", value="/tempo-otlp"))
+            ],
+            backend_refs=[BackendRef(name="tempo", port=4318, namespace="cos")],
+            filters=[],
+        ),
+        HTTPRoute(
+            name="tempo-zipkin",
+            listener_port=80,
+            listener_protocol="HTTP",
+            namespace="cos",
+            source_app="tempo",
+            source_relation="istio-ingress-route",
+            matches=[
+                HTTPRouteMatch(path=HTTPPathMatch(type="PathPrefix", value="/tempo-zipkin"))
+            ],
+            backend_refs=[BackendRef(name="tempo", port=9411, namespace="cos")],
+            filters=[],
+        ),
+        # A different service in the same namespace with a single port
+        HTTPRoute(
+            name="grafana-route",
+            listener_port=80,
+            listener_protocol="HTTP",
+            namespace="cos",
+            source_app="grafana",
+            source_relation="istio-ingress-route",
+            matches=[
+                HTTPRouteMatch(path=HTTPPathMatch(type="PathPrefix", value="/grafana"))
+            ],
+            backend_refs=[BackendRef(name="grafana", port=3000, namespace="cos")],
+            filters=[],
+        ),
+    ]
+
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        auth_policies = charm._construct_auth_policies(http_routes=http_routes, grpc_routes=[])
+
+        # Should produce exactly 2 policies: one for tempo (3 ports aggregated), one for grafana
+        assert len(auth_policies) == 2
+
+        # Find the tempo policy
+        tempo_policy = next(
+            p for p in auth_policies
+            if p.metadata.name == f"tempo-{charm.app.name}-cos-l4"
+        )
+        # All 3 ports should be aggregated into a single policy
+        tempo_ports = tempo_policy.spec["rules"][0]["to"][0]["operation"]["ports"]
+        assert sorted(tempo_ports) == ["3200", "4318", "9411"]
+
+        # Find the grafana policy
+        grafana_policy = next(
+            p for p in auth_policies
+            if p.metadata.name == f"grafana-{charm.app.name}-cos-l4"
+        )
+        grafana_ports = grafana_policy.spec["rules"][0]["to"][0]["operation"]["ports"]
+        assert grafana_ports == ["3000"]
+
+        # Verify both policies have correct namespace and selector
+        assert tempo_policy.metadata.namespace == "cos"
+        assert tempo_policy.spec["selector"]["matchLabels"]["app.kubernetes.io/name"] == "tempo"
+        assert grafana_policy.metadata.namespace == "cos"
+        assert grafana_policy.spec["selector"]["matchLabels"]["app.kubernetes.io/name"] == "grafana"
+
+
+def test_construct_auth_policies_mixed_http_grpc(istio_ingress_charm, istio_ingress_context):
+    """Test that _construct_auth_policies aggregates ports across HTTP and gRPC routes for the same backend."""
+    from models import GRPCMethodMatch, GRPCRouteMatch
+
+    http_routes = [
+        HTTPRoute(
+            name="myapp-http",
+            listener_port=80,
+            listener_protocol="HTTP",
+            namespace="test-ns",
+            source_app="myapp",
+            source_relation="istio-ingress-route",
+            matches=[
+                HTTPRouteMatch(path=HTTPPathMatch(type="PathPrefix", value="/myapp"))
+            ],
+            backend_refs=[BackendRef(name="myapp", port=8080, namespace="test-ns")],
+            filters=[],
+        ),
+    ]
+    grpc_routes = [
+        {
+            "name": "myapp-grpc",
+            "listener_port": 9000,
+            "listener_protocol": "HTTP",
+            "namespace": "test-ns",
+            "source_app": "myapp",
+            "source_relation": "istio-ingress-route",
+            "matches": [
+                GRPCRouteMatch(method=GRPCMethodMatch(service="myapp.Service", method="Call"))
+            ],
+            "backend_refs": [BackendRef(name="myapp", port=9000, namespace="test-ns")],
+            "filters": [],
+        },
+    ]
+
+    with istio_ingress_context(
+        istio_ingress_context.on.update_status(),
+        state=scenario.State(),
+    ) as manager:
+        charm: IstioIngressCharm = manager.charm
+        auth_policies = charm._construct_auth_policies(
+            http_routes=http_routes, grpc_routes=grpc_routes
+        )
+
+        # Same backend (myapp, test-ns) from both HTTP and gRPC → single policy with both ports
+        assert len(auth_policies) == 1
+        ports = auth_policies[0].spec["rules"][0]["to"][0]["operation"]["ports"]
+        assert sorted(ports) == ["8080", "9000"]
 
 
 def generate_ingress_relation_data(
