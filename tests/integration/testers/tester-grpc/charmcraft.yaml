@@ -17,6 +17,7 @@ parts:
       - cryptography
       - jsonschema
       - pydantic>=2
+      - charmlibs-interfaces-istio-ingress-route
 
 
 requires:

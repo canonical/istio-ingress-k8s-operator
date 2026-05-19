@@ -19,7 +19,8 @@ parts:
       - cryptography
       - jsonschema
       - pydantic>=2
-      - charmed-service-mesh-helpers
+      - charmlibs-interfaces-gateway-metadata
+      - charmlibs-interfaces-istio-ingress-route
       - charmlibs-interfaces-istio-request-auth
 
 

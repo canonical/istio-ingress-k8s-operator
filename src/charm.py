@@ -11,50 +11,60 @@ import time
 from typing import Any, Dict, List, Optional, Tuple, cast
 from urllib.parse import urlparse
 
-from canonical_service_mesh.enums import Action as RequestAuthAction
-
-# Request-auth resources use canonical_service_mesh models (has notRequestPrincipals etc.)
-# until we fully migrate all auth policy models to canonical_service_mesh we will use aliasing.
-from canonical_service_mesh.models.istio import (
-    AuthorizationPolicySpec as RequestAuthorizationPolicySpec,
-)
-from canonical_service_mesh.models.istio import (
-    ClaimToHeader,
-    FromHeader,
-    JWTRule,
-    RequestAuthenticationSpec,
-)
-from canonical_service_mesh.models.istio import Condition as RequestAuthCondition
-from canonical_service_mesh.models.istio import From as RequestAuthFrom
-from canonical_service_mesh.models.istio import (
-    PolicyTargetReference as RequestAuthenticationTargetRef,
-)
-from canonical_service_mesh.models.istio import Rule as RequestAuthRule
-from canonical_service_mesh.models.istio import Source as RequestAuthSource
-from charmed_service_mesh_helpers import (
-    Action,
-    AuthorizationPolicySpec,
-    Condition,
-    From,
-    Operation,
-    PolicyTargetReference,
-    Provider,
-    Rule,
-    Source,
-    To,
-    WorkloadSelector,
-)
-from charmed_service_mesh_helpers.interfaces import GatewayMetadata, GatewayMetadataProvider
-from charmlibs.interfaces.istio_request_auth import IstioRequestAuthProvider
-from charms.istio_beacon_k8s.v0.service_mesh import MeshType, PolicyResourceManager
-from charms.istio_ingress_k8s.v0.istio_ingress_route import IstioIngressRouteProvider
-from charms.istio_k8s.v0.istio_ingress_config import (
+from canonical_service_mesh.enums import Action
+from canonical_service_mesh.interfaces.istio_ingress_config import (
     DEFAULT_HEADERS_TO_DOWNSTREAM_ON_ALLOW,
     DEFAULT_HEADERS_TO_DOWNSTREAM_ON_DENY,
     DEFAULT_HEADERS_TO_UPSTREAM_ON_ALLOW,
     DEFAULT_INCLUDE_HEADERS_IN_CHECK,
     IngressConfigProvider,
 )
+from canonical_service_mesh.k8s.resource_manager import (
+    KubernetesResourceManager,
+    PolicyResourceManager,
+    create_charm_default_labels,
+)
+from canonical_service_mesh.k8s.types.istio import AuthorizationPolicy
+from canonical_service_mesh.models import (
+    AllowedRoutes,
+    GatewayTLSConfig,
+    GRPCRouteResource,
+    GRPCRouteResourceSpec,
+    GRPCRouteRule,
+    HTTPRouteResource,
+    HTTPRouteResourceSpec,
+    HTTPRouteRule,
+    IstioGatewayResource,
+    IstioGatewaySpec,
+    Listener,
+    Metadata,
+    ParentRef,
+    SecretObjectReference,
+)
+from canonical_service_mesh.models.istio import (
+    AuthorizationPolicySpec,
+    ClaimToHeader,
+    Condition,
+    From,
+    FromHeader,
+    JWTRule,
+    Operation,
+    PolicyTargetReference,
+    Provider,
+    RequestAuthenticationSpec,
+    Rule,
+    Source,
+    To,
+    WorkloadSelector,
+)
+from canonical_service_mesh.utils import (
+    generate_telemetry_labels,
+    get_peer_identity_for_juju_application,
+)
+from charmlibs.interfaces.gateway_metadata import GatewayMetadata, GatewayMetadataProvider
+from charmlibs.interfaces.istio_ingress_route import IstioIngressRouteProvider
+from charmlibs.interfaces.istio_request_auth import IstioRequestAuthProvider
+from charmlibs.interfaces.service_mesh import MeshType
 from charms.oauth2_proxy_k8s.v0.forward_auth import ForwardAuthRequirer, ForwardAuthRequirerConfig
 from charms.observability_libs.v1.cert_handler import CertHandler
 from charms.prometheus_k8s.v0.prometheus_scrape import MetricsEndpointProvider
@@ -74,29 +84,11 @@ from lightkube.resources.apps_v1 import Deployment
 from lightkube.resources.autoscaling_v2 import HorizontalPodAutoscaler
 from lightkube.resources.core_v1 import Secret, Service
 from lightkube.types import PatchType
-from lightkube_extensions.batch import KubernetesResourceManager, create_charm_default_labels
-from lightkube_extensions.types import AuthorizationPolicy
 from ops import BlockedStatus, CollectStatusEvent, main
 from ops.charm import CharmBase
 from ops.model import ActiveStatus, MaintenanceStatus
 from ops.pebble import ChangeError, Layer
 
-from models import (
-    AllowedRoutes,
-    GatewayTLSConfig,
-    GRPCRouteResource,
-    GRPCRouteResourceSpec,
-    GRPCRouteRule,
-    HTTPRouteResource,
-    HTTPRouteResourceSpec,
-    HTTPRouteRule,
-    IstioGatewayResource,
-    IstioGatewaySpec,
-    Listener,
-    Metadata,
-    ParentRef,
-    SecretObjectReference,
-)
 from utils import (
     INGRESS_AUTHENTICATED_NAME,
     INGRESS_UNAUTHENTICATED_NAME,
@@ -112,8 +104,6 @@ from utils import (
     deduplicate_grpc_routes,
     deduplicate_http_routes,
     deduplicate_listeners,
-    generate_telemetry_labels,
-    get_peer_identity_for_juju_application,
     get_relation_by_name_and_app,
     get_unauthenticated_paths,
     get_unauthenticated_paths_from_istio_ingress_route_configs,
@@ -854,7 +844,7 @@ class IstioIngressCharm(CharmBase):
             ),
             spec=RequestAuthenticationSpec(
                 targetRefs=[
-                    RequestAuthenticationTargetRef(
+                    PolicyTargetReference(
                         kind="Gateway",
                         group="gateway.networking.k8s.io",
                         name=self.app.name,
@@ -876,7 +866,7 @@ class IstioIngressCharm(CharmBase):
         when_conditions = None
         if bearer_only:
             when_conditions = [
-                RequestAuthCondition(
+                Condition(
                     key="request.headers[authorization]", values=["Bearer *"]
                 )
             ]
@@ -886,16 +876,16 @@ class IstioIngressCharm(CharmBase):
                 name=f"deny-without-jwt-{self.app.name}",
                 namespace=self.model.name,
             ),
-            spec=RequestAuthorizationPolicySpec(
-                action=RequestAuthAction.deny,
+            spec=AuthorizationPolicySpec(
+                action=Action.deny,
                 rules=[
-                    RequestAuthRule(
-                        from_=[RequestAuthFrom(source=RequestAuthSource(notRequestPrincipals=["*"]))],  # type: ignore[call-arg]
+                    Rule(
+                        from_=[From(source=Source(notRequestPrincipals=["*"]))],  # type: ignore[call-arg]
                         when=when_conditions,
                     )
                 ],
                 targetRefs=[
-                    RequestAuthenticationTargetRef(
+                    PolicyTargetReference(
                         kind="Gateway",
                         group="gateway.networking.k8s.io",
                         name=self.app.name,

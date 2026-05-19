@@ -5,18 +5,20 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 import scenario
-from charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from canonical_service_mesh.models import (
+    BackendRef,
+    GRPCMethodMatch,
+    GRPCRouteMatch,
+    HTTPPathMatch,
+    HTTPRouteMatch,
+)
+from charmlibs.interfaces.istio_ingress_route import (
     RequestRedirectFilter,
     RequestRedirectSpec,
 )
 from ops import ActiveStatus, BlockedStatus
 
 from charm import IstioIngressCharm
-from models import (
-    BackendRef,
-    HTTPPathMatch,
-    HTTPRouteMatch,
-)
 from tests.unit.test_gateway import generate_certificates_relation
 from utils import HTTPRoute, RouteInfo, get_unauthenticated_paths
 
@@ -234,8 +236,6 @@ def test_construct_auth_policies_multi_port_aggregation(istio_ingress_charm, ist
 
 def test_construct_auth_policies_mixed_http_grpc(istio_ingress_charm, istio_ingress_context):
     """Test that _construct_auth_policies aggregates ports across HTTP and gRPC routes for the same backend."""
-    from models import GRPCMethodMatch, GRPCRouteMatch
-
     http_routes = [
         HTTPRoute(
             name="myapp-http",
@@ -709,8 +709,6 @@ def test_ingress_e2e(
 
 def test_construct_grpc_destination_rules(istio_ingress_charm, istio_ingress_context):
     """Test that _construct_grpc_destination_rules creates DestinationRules correctly."""
-    from models import BackendRef, GRPCMethodMatch, GRPCRouteMatch
-
     # Create test gRPC routes with some duplicate backends to test deduplication
     grpc_routes = [
         # Route 1: tester-grpc service on port 9000

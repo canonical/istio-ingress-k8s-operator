@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 # Copyright 2022 Canonical Ltd.
 # See LICENSE file for licensing details.
-from charmed_service_mesh_helpers.interfaces import GatewayMetadataRequirer
-from charmlibs.interfaces.istio_request_auth import (
-    IstioRequestAuthRequirer,
-    JWTRule,
-)
-from charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charmlibs.interfaces.gateway_metadata import GatewayMetadataRequirer
+from charmlibs.interfaces.istio_ingress_route import (
     BackendRef,
     HTTPPathMatch,
     HTTPPathMatchType,
@@ -20,6 +16,10 @@ from charms.istio_ingress_k8s.v0.istio_ingress_route import (
     ProtocolType,
     URLRewriteFilter,
     URLRewriteSpec,
+)
+from charmlibs.interfaces.istio_request_auth import (
+    IstioRequestAuthRequirer,
+    JWTRule,
 )
 from charms.traefik_k8s.v2.ingress import IngressPerAppRequirer
 from ops.charm import CharmBase

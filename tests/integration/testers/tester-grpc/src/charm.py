@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 # Copyright 2024 Canonical Ltd.
 # See LICENSE file for licensing details.
-from charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charmlibs.interfaces.istio_ingress_route import (
     BackendRef,
     GRPCMethodMatch,
     GRPCRoute,
