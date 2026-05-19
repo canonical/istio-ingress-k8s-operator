@@ -54,7 +54,7 @@ wheels = [
 
 [[package]]
 name = "canonical-service-mesh"
-version = "0.0.1"
+version = "0.0.2"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "httpx" },
@@ -62,9 +62,9 @@ dependencies = [
     { name = "ops" },
     { name = "pydantic" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/9d/c8/160769d7e8297f6888029abc53dd3107241f9867ec52fd838e06bdb2d694/canonical_service_mesh-0.0.1.tar.gz", hash = "sha256:d271e6c326060540a1aa05fd6ff57b5f8199f54a3aac9871209e5e812980b5e3", size = 67323, upload-time = "2026-04-24T12:44:53.2Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/b2/82/1eb5b4c6a129062ef2703b29f375cb56453bb02ce2a95e30ccb5259f015c/canonical_service_mesh-0.0.2.tar.gz", hash = "sha256:8d126ac1144ebd4d0220e3346e2c8e282235426cc0e42004b9fcaef1f4091981", size = 67801, upload-time = "2026-05-14T11:38:26.748Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ca/00/8134f6d30f0d8ccd137f15be768ea5513912d595eb601ed7206ea3a4a411/canonical_service_mesh-0.0.1-py3-none-any.whl", hash = "sha256:f764455f965efbf3048cf8879ad09dd1c3f7fc0b4cc3215c14e3f201bd7b04c7", size = 28317, upload-time = "2026-04-24T12:44:51.691Z" },
+    { url = "https://files.pythonhosted.org/packages/6a/56/663969013533e866277a3dedb7320ebdfed966e4c7d6a175080a22aab042/canonical_service_mesh-0.0.2-py3-none-any.whl", hash = "sha256:7bf52dcd1d7f3ed32fdd7c1e8bfdead1c427356b43ac7532fa1daf70e2592d39", size = 28384, upload-time = "2026-05-14T11:38:25.46Z" },
 ]
 
 [[package]]
@@ -771,7 +771,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "canonical-service-mesh" },
+    { name = "canonical-service-mesh", specifier = ">=0.0.2" },
     { name = "charmlibs-interfaces-gateway-metadata" },
     { name = "charmlibs-interfaces-istio-ingress-route" },
     { name = "charmlibs-interfaces-istio-request-auth" },
