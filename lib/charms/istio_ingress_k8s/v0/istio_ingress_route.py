@@ -98,6 +98,17 @@ class MyCharm(CharmBase):
       # Use this URL for your application configuration
 ```
 
+Note:
+
+If you are using this library on standard ports (80/443), you will have to check if TLS is enabled.
+```python
+if self.ingress.tls_enabled:
+    port = 443
+else:
+    port = 80
+http_listener = Listener(port=port, protocol=ProtocolType.HTTP)
+```
+
 To use the library from the provider side (istio-ingress):
 
 ```yaml
