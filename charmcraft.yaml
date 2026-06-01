@@ -22,13 +22,18 @@ parts:
     override-build: |
       craftctl default
       git describe --always > $CRAFT_PART_INSTALL/version
+  icon:
+    plugin: dump
+    source: .
+    stage:
+      - icon.svg
 
 charm-libs:
   - lib: "tls_certificates_interface.tls_certificates"
     version: '3'
   - lib: "observability-libs.cert_handler"
     version: '1'
-  
+
 containers:
   metrics-proxy:
     resource: metrics-proxy-image
