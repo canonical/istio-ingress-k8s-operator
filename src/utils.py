@@ -8,14 +8,18 @@
 This module contains normalization, deduplication, and helper functions used by the charm.
 Functions here are source-agnostic and work on normalized data structures.
 """
-import hashlib
 import logging
 from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple, TypedDict
 
-from charms.istio_ingress_k8s.v0.istio_ingress_route import (
-    GRPCRouteFilter,
-    HTTPRouteFilter,
+from canonical_service_mesh.models import (
+    BackendRef,
+    GRPCMethodMatch,
+    GRPCRouteMatch,
+    HTTPPathMatch,
+    HTTPRouteMatch,
+)
+from charmlibs.interfaces.istio_ingress_route import (
     PathModifier,
     PathModifierType,
     RequestRedirectFilter,
@@ -26,13 +30,8 @@ from charms.istio_ingress_k8s.v0.istio_ingress_route import (
 )
 from ops import EventBase
 
-from models import (
-    BackendRef,
-    GRPCMethodMatch,
-    GRPCRouteMatch,
-    HTTPPathMatch,
-    HTTPRouteMatch,
-)
+HTTPRouteFilter = URLRewriteFilter | RequestRedirectFilter
+GRPCRouteFilter = RequestRedirectFilter
 
 logger = logging.getLogger(__name__)
 
@@ -807,18 +806,6 @@ def clear_conflicting_routes(
 # ============================================================================
 # Helper Functions
 # ============================================================================
-def get_peer_identity_for_juju_application(app_name, namespace):
-    """Return a Juju application's peer identity.
-
-    Format returned is defined by `principals` in
-    [this reference](https://istio.io/latest/docs/reference/config/security/authorization-policy/#Source):
-
-    This function relies on the Juju convention that each application gets a ServiceAccount of the same name in the same
-    namespace.
-    """
-    return f"cluster.local/ns/{namespace}/sa/{app_name}"
-
-
 def get_unauthenticated_paths(application_route_data):
     """Return a list of the paths requested through the Gateway on the unauthenticated ingress."""
     unauthenticated_paths = []
@@ -907,28 +894,3 @@ def get_relation_by_name_and_app(relations, remote_app_name):
     raise KeyError(f"Could not find relation with remote_app_name={remote_app_name}")
 
 
-def generate_telemetry_labels(app_name: str, model_name: str) -> Dict[str, str]:
-    """Generate telemetry labels for the application, ensuring it is always <=63 characters and usually unique.
-
-    The telemetry labels need to be unique for each application in order to prevent one application from scraping
-    another's metrics (eg: istio-beacon scraping the workloads of istio-ingress).  Ideally, this would be done by
-    including model_name and app_name in the label key or value, but Kubernetes label keys and values have a 63
-    character limit.  This, thus function returns:
-    * a label with a key that includes model_name and app_name, if that key is less than 63 characters
-    * a label with a key that is truncated to 63 characters but includes a hash of the full model_name and app_name, to
-      attempt to ensure uniqueness.
-
-    The hash is included because simply truncating the model or app names may lead to collisions.  Consider if
-    istio-beacon is deployed to two different models of names `really-long-model-name1` and `really-long-model-name2`,
-    they'd truncate to the same key.  To reduce this risk, we also include a hash of the model and app names which very
-    likely differs between two applications.
-    """
-    key = f"charms.canonical.com/{model_name}.{app_name}.telemetry"
-    if len(key) > 63:
-        # Truncate the key to fit within the 63-character limit.  Include a hash of the real model_name.app_name to
-        # avoid collisions with some other truncated key.
-        hash = hashlib.md5(f"{model_name}.{app_name}".encode()).hexdigest()[:10]
-        key = f"charms.canonical.com/{model_name[:10]}.{app_name[:10]}.{hash}.telemetry"
-    return {
-        key: "aggregated",
-    }

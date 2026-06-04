@@ -3,29 +3,29 @@
 
 """Tests for utils.py normalization functions."""
 
-from charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charmlibs.interfaces.istio_ingress_route import (
     BackendRef as LibBackendRef,
 )
-from charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charmlibs.interfaces.istio_ingress_route import (
     FilterType,
     GRPCMethodMatch,
     IstioIngressRouteConfig,
     Listener,
     ProtocolType,
 )
-from charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charmlibs.interfaces.istio_ingress_route import (
     GRPCRoute as LibGRPCRoute,
 )
-from charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charmlibs.interfaces.istio_ingress_route import (
     GRPCRouteMatch as LibGRPCRouteMatch,
 )
-from charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charmlibs.interfaces.istio_ingress_route import (
     HTTPPathMatch as LibHTTPPathMatch,
 )
-from charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charmlibs.interfaces.istio_ingress_route import (
     HTTPRoute as LibHTTPRoute,
 )
-from charms.istio_ingress_k8s.v0.istio_ingress_route import (
+from charmlibs.interfaces.istio_ingress_route import (
     HTTPRouteMatch as LibHTTPRouteMatch,
 )
 

@@ -4,9 +4,8 @@ name: tester-mock-oauth2
 description: Mock OAuth2 server for testing JWT-based authentication
 summary: Wraps navikt/mock-oauth2-server for integration testing
 type: charm
-base: ubuntu@24.04
 platforms:
-  amd64:
+  ubuntu@24.04:amd64:
 parts:
   charm:
     source: .

@@ -4,13 +4,8 @@ name: tester-http
 description: HTTP echo server for testing ingress routes
 summary: HTTP echo server for testing ingress routes
 type: charm
-bases:
-  - build-on:
-      - name: "ubuntu"
-        channel: "22.04"
-    run-on:
-      - name: "ubuntu"
-        channel: "22.04"
+platforms:
+  ubuntu@24.04:amd64:
 parts:
   charm:
     build-packages:
@@ -19,7 +14,8 @@ parts:
       - cryptography
       - jsonschema
       - pydantic>=2
-      - charmed-service-mesh-helpers
+      - charmlibs-interfaces-gateway-metadata
+      - charmlibs-interfaces-istio-ingress-route
       - charmlibs-interfaces-istio-request-auth
 
 
