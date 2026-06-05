@@ -9,6 +9,11 @@ import pytest
 from charms.traefik_k8s.v2.ingress import IngressPerAppRequirer
 from ops.testing import Harness
 
+from canonical_service_mesh.models import (
+    AllowedRoutes, 
+    Listener,
+)
+
 from charm import IstioIngressCharm
 
 
@@ -75,6 +80,6 @@ def test_construct_gateway_uses_local_address_not_upstream(harness):
     ), patch.object(
         IngressPerAppRequirer, "url", new_callable=PropertyMock, return_value="https://upstream.example.com/model-app/"
     ):
-        listeners = [{"port": 80, "gateway_protocol": "HTTP", "tls_secret_name": None, "source_app": "test"}]
+        listeners = [Listener(name="",port=80,protocol="HTTP",allowedRoutes=AllowedRoutes(namespaces={}),tls=None)]
         gateway = charm._construct_gateway(listeners)
         assert gateway.spec["listeners"][0]["hostname"] == "local.example.com"

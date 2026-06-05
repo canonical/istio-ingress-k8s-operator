@@ -17,14 +17,19 @@ from lightkube.resources.autoscaling_v2 import HorizontalPodAutoscaler
 from lightkube.resources.core_v1 import Secret
 from ops import ActiveStatus
 
+from canonical_service_mesh.models import (
+    AllowedRoutes, 
+    Listener,
+)
+
 from charm import IstioIngressCharm
-from utils import GatewayListener
+from utils import create_gateway_tls_config
 
 
 def create_test_listeners(
     ports=(80,), protocols=("HTTP",), tls_secret_names=(None,), source_apps=("test-app",)
 ):
-    """Create normalized GatewayListener list for testing."""
+    """Create normalized Listener list for testing."""
     max_len = max(len(ports), len(protocols), len(tls_secret_names), len(source_apps))
     ports = ports + (ports[-1],) * (max_len - len(ports)) if ports else (80,) * max_len
     protocols = protocols + (protocols[-1],) * (max_len - len(protocols)) if protocols else ("HTTP",) * max_len
@@ -32,11 +37,12 @@ def create_test_listeners(
     source_apps = source_apps + (source_apps[-1],) * (max_len - len(source_apps)) if source_apps else ("test-app",) * max_len
 
     return [
-        GatewayListener(
+        Listener(
+            name=source_app,
             port=port,
-            gateway_protocol=protocol,
-            tls_secret_name=tls_secret_name,
-            source_app=source_app,
+            protocol=protocol,
+            allowedRoutes=AllowedRoutes(namespaces={}),
+            tls=create_gateway_tls_config(tls_secret_name) if tls_secret_name else None,
         )
         for port, protocol, tls_secret_name, source_app in zip(
             ports, protocols, tls_secret_names, source_apps

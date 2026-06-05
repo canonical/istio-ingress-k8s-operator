@@ -13,11 +13,15 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple, TypedDict
 
 from canonical_service_mesh.models import (
+    AllowedRoutes,
     BackendRef,
+    GatewayTLSConfig,  
     GRPCMethodMatch,
     GRPCRouteMatch,
     HTTPPathMatch,
     HTTPRouteMatch,
+    Listener,
+    SecretObjectReference
 )
 from charmlibs.interfaces.istio_ingress_route import (
     PathModifier,
@@ -77,15 +81,6 @@ class RouteInfo(TypedDict):
     prefix: Optional[str]
 
 
-class GatewayListener(TypedDict):
-    """Normalized Gateway listener data structure."""
-
-    port: int
-    gateway_protocol: str
-    tls_secret_name: Optional[str]
-    source_app: str
-
-
 class HTTPRoute(TypedDict):
     """Normalized HTTPRoute data structure.
 
@@ -123,7 +118,7 @@ class GRPCRoute(TypedDict):
 # ============================================================================
 # Adapters
 # ============================================================================
-def normalize_ipa_listeners(tls_secret_name: Optional[str]) -> List[GatewayListener]:
+def normalize_ipa_listeners(tls_secret_name: Optional[str]) -> List[Listener]:
     """Normalize IPA listeners to common format.
 
     IPA always uses standard ports: 80 for HTTP, 443 for HTTPS.
@@ -134,22 +129,24 @@ def normalize_ipa_listeners(tls_secret_name: Optional[str]) -> List[GatewayListe
     Returns:
         List of normalized listeners (http-80, and https-443 if TLS enabled)
     """
-    listeners: List[GatewayListener] = [
-        GatewayListener(
+    listeners: List[Listener] = [
+        Listener(
+            name="",
             port=80,
-            gateway_protocol="HTTP",
-            tls_secret_name=None,
-            source_app="ipa",
+            protocol="HTTP",
+            allowedRoutes=AllowedRoutes(namespaces={}),
+            tls=None,
         )
     ]
 
     if tls_secret_name:
         listeners.append(
-            GatewayListener(
+            Listener(
+                name="",
                 port=443,
-                gateway_protocol="HTTPS",
-                tls_secret_name=tls_secret_name,
-                source_app="ipa",
+                protocol="HTTPS",
+                allowedRoutes=AllowedRoutes(namespaces={}),
+                tls=create_gateway_tls_config(tls_secret_name) # tls_secret_name,
             )
         )
 
@@ -158,7 +155,7 @@ def normalize_ipa_listeners(tls_secret_name: Optional[str]) -> List[GatewayListe
 
 def normalize_istio_ingress_route_listeners(
     istio_ingress_route_configs: dict, tls_secret_name: Optional[str]
-) -> List[GatewayListener]:
+) -> List[Listener]:
     """Normalize istio-ingress-route listeners to common format.
 
     Args:
@@ -168,9 +165,9 @@ def normalize_istio_ingress_route_listeners(
     Returns:
         List of normalized listeners
     """
-    listeners: List[GatewayListener] = []
+    listeners: List[Listener] = []
 
-    for (app_name, relation_name), config_data in istio_ingress_route_configs.items():
+    for (app_name, _), config_data in istio_ingress_route_configs.items():
         config = config_data["config"]
         if not config:
             continue
@@ -181,12 +178,18 @@ def normalize_istio_ingress_route_listeners(
                 listener.protocol, tls_enabled=tls_secret_name is not None
             )
 
+            tls_config = None
+            if tls_secret_name is not None:
+                tls_config = create_gateway_tls_config(tls_secret_name) 
+
             listeners.append(
-                GatewayListener(
+                Listener(
+                    name="",
                     port=listener.port,
-                    gateway_protocol=gateway_protocol,
-                    tls_secret_name=tls_secret_name if gateway_protocol == "HTTPS" else None,
-                    source_app=app_name,
+                    protocol=gateway_protocol,
+                    allowedRoutes=AllowedRoutes(namespaces={}),
+                    tls=tls_config,
+                    # source_app=app_name,
                 )
             )
 
@@ -502,7 +505,7 @@ def normalize_istio_ingress_route_grpc_routes(
 # ============================================================================
 # Generic Processing Functions (work on normalized data)
 # ============================================================================
-def deduplicate_listeners(all_listeners: List[GatewayListener]) -> List[GatewayListener]:
+def deduplicate_listeners(all_listeners: List[Listener]) -> List[Listener]:
     """Merge listeners by deduplicating on (port, gateway_protocol).
 
     Keeps the first occurrence of each unique (port, protocol) combination.
@@ -510,17 +513,17 @@ def deduplicate_listeners(all_listeners: List[GatewayListener]) -> List[GatewayL
 
     For example, given input:
         [
-            _GatewayListener(port=80, gateway_protocol="HTTP", source_app="ipa", ...),
-            _GatewayListener(port=443, gateway_protocol="HTTPS", source_app="ipa", ...),
-            _GatewayListener(port=80, gateway_protocol="HTTP", source_app="app1", ...),  # Duplicate
-            _GatewayListener(port=8080, gateway_protocol="HTTP", source_app="app2", ...),
+            Listener(port=80, protocol="HTTP", name="x", ...),
+            Listener(port=443, protocol="HTTPS", ...),
+            Listener(port=80, protocol="HTTP", name="y" ...),  # Duplicate
+            Listener(port=8080, protocol="HTTP", ...),
         ]
 
     This function would return:
         [
-            _GatewayListener(port=80, gateway_protocol="HTTP", source_app="ipa", ...),    # First wins
-            _GatewayListener(port=443, gateway_protocol="HTTPS", source_app="ipa", ...),
-            _GatewayListener(port=8080, gateway_protocol="HTTP", source_app="app2", ...),
+            Listener(port=80, protocol="HTTP", name="x", ...),    # First wins
+            Listener(port=443, protocol="HTTPS", ...),
+            Listener(port=8080, protocol="HTTP", ...),
         ]
 
     Args:
@@ -529,10 +532,10 @@ def deduplicate_listeners(all_listeners: List[GatewayListener]) -> List[GatewayL
     Returns:
         List of unique listeners (first occurrence wins for each unique port/protocol pair)
     """
-    seen: Dict[Tuple[int, str], GatewayListener] = {}
+    seen: Dict[Tuple[int, str], Listener] = {}
 
     for listener in all_listeners:
-        key = (listener["port"], listener["gateway_protocol"])
+        key = (listener.port, listener.protocol)
         if key not in seen:
             seen[key] = listener
 
@@ -894,3 +897,6 @@ def get_relation_by_name_and_app(relations, remote_app_name):
     raise KeyError(f"Could not find relation with remote_app_name={remote_app_name}")
 
 
+def create_gateway_tls_config(tls_secret_name: str) -> GatewayTLSConfig:
+    """Return a simple GatewayTLSConfig object based on the provided tls_secret_name."""
+    return GatewayTLSConfig(certificateRefs=[SecretObjectReference(name=tls_secret_name)])

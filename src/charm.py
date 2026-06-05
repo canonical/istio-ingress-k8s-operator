@@ -95,7 +95,6 @@ from utils import (
     ISTIO_INGRESS_ROUTE_AUTHENTICATED_NAME,
     ISTIO_INGRESS_ROUTE_UNAUTHENTICATED_NAME,
     DisabledCertHandler,
-    GatewayListener,
     GRPCRoute,
     HTTPRoute,
     RefreshCerts,
@@ -617,7 +616,7 @@ class IstioIngressCharm(CharmBase):
             },
         )
 
-    def _construct_gateway(self, normalized_listeners: List[GatewayListener]):
+    def _construct_gateway(self, normalized_listeners: List[Listener]):
         """Construct the Gateway resource from normalized listeners.
 
         This method constructs a Gateway from a list of normalized listeners that have already
@@ -641,23 +640,14 @@ class IstioIngressCharm(CharmBase):
         listeners = []
         for norm_listener in normalized_listeners:
             # Derive listener name from Gateway protocol and port
-            listener_name = f"{norm_listener['gateway_protocol'].lower()}-{norm_listener['port']}"
+            listener_name = f"{norm_listener.protocol.lower()}-{norm_listener.port}"
 
-            listener = Listener(
-                name=listener_name,
-                port=norm_listener["port"],
-                protocol=norm_listener["gateway_protocol"],
-                allowedRoutes=allowed_routes,
-                hostname=hostname,
-            )
+            # replace old placeholder values
+            norm_listener.name = listener_name
+            norm_listener.allowedRoutes = allowed_routes
+            norm_listener.hostname = hostname
 
-            # Add TLS config if this is an HTTPS listener
-            if norm_listener["gateway_protocol"] == "HTTPS" and norm_listener["tls_secret_name"]:
-                listener.tls = GatewayTLSConfig(
-                    certificateRefs=[SecretObjectReference(name=norm_listener["tls_secret_name"])]
-                )
-
-            listeners.append(listener)
+            listeners.append(norm_listener)
 
         gateway = IstioGatewayResource(
             metadata=Metadata(
@@ -945,7 +935,7 @@ class IstioIngressCharm(CharmBase):
 
         policy_manager.reconcile(policies=[], mesh_type=MeshType.istio, raw_policies=resources)
 
-    def _sync_all_resources(self):
+    def _sync_all_resources(self) -> None:
         """Synchronize all resources including authentication, gateway, ingress, and certificates.
 
         Flow:
@@ -989,8 +979,8 @@ class IstioIngressCharm(CharmBase):
         tls_secret_name = self._certificate_secret_name if self._is_tls_enabled() else None
 
         # Normalize listeners from both sources
-        ipa_listeners = normalize_ipa_listeners(tls_secret_name)
-        istio_listeners = normalize_istio_ingress_route_listeners(
+        ipa_listeners: List[Listener] = normalize_ipa_listeners(tls_secret_name)
+        istio_listeners: List[Listener] = normalize_istio_ingress_route_listeners(
             istio_ingress_route_configs, tls_secret_name
         )
 
@@ -1354,7 +1344,7 @@ class IstioIngressCharm(CharmBase):
         resources = [self._construct_external_traffic_auth_policy(ip_blocks)]
         policy_manager.reconcile(policies=[], mesh_type=MeshType.istio, raw_policies=resources)
 
-    def _sync_gateway_resources(self, normalized_listeners: List[GatewayListener]):
+    def _sync_gateway_resources(self, normalized_listeners: List[Listener]):
         """Synchronize Gateway resources using normalized listeners.
 
         Args:
