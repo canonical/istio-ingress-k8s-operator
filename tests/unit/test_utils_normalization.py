@@ -3,6 +3,13 @@
 
 """Tests for utils.py normalization functions."""
 
+from canonical_service_mesh.models import (
+    AllowedRoutes,
+    Listener,
+)
+from charmlibs.interfaces.istio_ingress_route import (
+    BackendRef as LibBackendRef,
+)
 from charmlibs.interfaces.istio_ingress_route import (
     FilterType,
     GRPCMethodMatch,
@@ -10,18 +17,22 @@ from charmlibs.interfaces.istio_ingress_route import (
     ProtocolType,
 )
 from charmlibs.interfaces.istio_ingress_route import (
-    BackendRef as LibBackendRef,
     GRPCRoute as LibGRPCRoute,
-    GRPCRouteMatch as LibGRPCRouteMatch,
-    HTTPPathMatch as LibHTTPPathMatch,
-    HTTPRoute as LibHTTPRoute,
-    HTTPRouteMatch as LibHTTPRouteMatch,
-    Listener as LibListener,
 )
-
-from canonical_service_mesh.models import (
-    AllowedRoutes, 
-    Listener,
+from charmlibs.interfaces.istio_ingress_route import (
+    GRPCRouteMatch as LibGRPCRouteMatch,
+)
+from charmlibs.interfaces.istio_ingress_route import (
+    HTTPPathMatch as LibHTTPPathMatch,
+)
+from charmlibs.interfaces.istio_ingress_route import (
+    HTTPRoute as LibHTTPRoute,
+)
+from charmlibs.interfaces.istio_ingress_route import (
+    HTTPRouteMatch as LibHTTPRouteMatch,
+)
+from charmlibs.interfaces.istio_ingress_route import (
+    Listener as LibListener,
 )
 
 from utils import (
@@ -164,7 +175,7 @@ def test_normalize_istio_ingress_route_listeners_with_tls():
     assert https_8080.protocol == "HTTPS"
     assert https_8080.tls is not None
     assert https_8080.tls.certificateRefs[0].name == "my-tls-secret"
-    
+
     assert https_9090.protocol == "HTTPS"
     assert https_9090.tls is not None
     assert https_9090.tls.certificateRefs[0].name == "my-tls-secret"

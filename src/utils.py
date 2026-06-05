@@ -15,13 +15,13 @@ from typing import Dict, List, Optional, Set, Tuple, TypedDict
 from canonical_service_mesh.models import (
     AllowedRoutes,
     BackendRef,
-    GatewayTLSConfig,  
+    GatewayTLSConfig,
     GRPCMethodMatch,
     GRPCRouteMatch,
     HTTPPathMatch,
     HTTPRouteMatch,
     Listener,
-    SecretObjectReference
+    SecretObjectReference,
 )
 from charmlibs.interfaces.istio_ingress_route import (
     PathModifier,
@@ -180,7 +180,7 @@ def normalize_istio_ingress_route_listeners(
 
             tls_config = None
             if tls_secret_name is not None:
-                tls_config = create_gateway_tls_config(tls_secret_name) 
+                tls_config = create_gateway_tls_config(tls_secret_name)
 
             listeners.append(
                 Listener(

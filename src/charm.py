@@ -27,7 +27,6 @@ from canonical_service_mesh.k8s.resource_manager import (
 from canonical_service_mesh.k8s.types.istio import AuthorizationPolicy
 from canonical_service_mesh.models import (
     AllowedRoutes,
-    GatewayTLSConfig,
     GRPCRouteResource,
     GRPCRouteResourceSpec,
     GRPCRouteRule,
@@ -39,7 +38,6 @@ from canonical_service_mesh.models import (
     Listener,
     Metadata,
     ParentRef,
-    SecretObjectReference,
 )
 from canonical_service_mesh.models.istio import (
     AuthorizationPolicySpec,

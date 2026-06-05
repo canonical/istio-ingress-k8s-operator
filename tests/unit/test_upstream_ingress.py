@@ -6,13 +6,12 @@
 from unittest.mock import PropertyMock, patch
 
 import pytest
-from charms.traefik_k8s.v2.ingress import IngressPerAppRequirer
-from ops.testing import Harness
-
 from canonical_service_mesh.models import (
-    AllowedRoutes, 
+    AllowedRoutes,
     Listener,
 )
+from charms.traefik_k8s.v2.ingress import IngressPerAppRequirer
+from ops.testing import Harness
 
 from charm import IstioIngressCharm
 

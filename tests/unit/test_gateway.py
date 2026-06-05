@@ -6,6 +6,10 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 import scenario
+from canonical_service_mesh.models import (
+    AllowedRoutes,
+    Listener,
+)
 from charms.tls_certificates_interface.v3.tls_certificates import (
     generate_ca,
     generate_certificate,
@@ -16,11 +20,6 @@ from lightkube.models.meta_v1 import ObjectMeta
 from lightkube.resources.autoscaling_v2 import HorizontalPodAutoscaler
 from lightkube.resources.core_v1 import Secret
 from ops import ActiveStatus
-
-from canonical_service_mesh.models import (
-    AllowedRoutes, 
-    Listener,
-)
 
 from charm import IstioIngressCharm
 from utils import create_gateway_tls_config
