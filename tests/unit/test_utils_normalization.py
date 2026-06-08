@@ -336,10 +336,10 @@ def test_normalize_istio_ingress_route_http_and_grpc_routes():
     # Verify gRPC route conversion
     assert len(grpc_routes) == 1
     grpc_route = grpc_routes[0]
-    assert grpc_route["name"] == "app1-grpc-route-grpcroute-http-9090-istio-ingress-k8s"  # Route name format: {app}-{route.name}-grpcroute-{section_name}-{ingress_app_name}
-    assert grpc_route["listener_port"] == 9090
-    assert grpc_route["source_relation"] == "istio-ingress-route"
-    assert len(grpc_route["matches"]) == 1
+    assert grpc_route.resource.metadata.name == "app1-grpc-route-grpcroute-http-9090-istio-ingress-k8s"  # Route name format: {app}-{route.name}-grpcroute-{section_name}-{ingress_app_name}
+    assert grpc_route.listener_port == 9090
+    assert grpc_route.source_relation == "istio-ingress-route"
+    assert len(grpc_route.resource.spec.rules[0].matches) == 1
 
 
 def test_get_unauthenticated_paths():

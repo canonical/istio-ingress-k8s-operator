@@ -27,9 +27,6 @@ from canonical_service_mesh.k8s.resource_manager import (
 from canonical_service_mesh.k8s.types.istio import AuthorizationPolicy
 from canonical_service_mesh.models import (
     AllowedRoutes,
-    GRPCRouteResource,
-    GRPCRouteResourceSpec,
-    GRPCRouteRule,
     IstioGatewayResource,
     IstioGatewaySpec,
     Listener,
@@ -1413,31 +1410,11 @@ class IstioIngressCharm(CharmBase):
 
         for route in grpc_routes:
             # Derive listener name from Gateway protocol and port
-            listener_name = f"{route['listener_protocol'].lower()}-{route['listener_port']}"
+            listener_name = f"{route.listener_protocol.lower()}-{route.listener_port}"
 
             # Construct GRPCRoute resource from normalized data
-            grpc_route_resource = GRPCRouteResource(
-                metadata=Metadata(
-                    name=route["name"],
-                    namespace=route["namespace"],
-                ),
-                spec=GRPCRouteResourceSpec(
-                    parentRefs=[
-                        ParentRef(
-                            name=self.app.name,
-                            namespace=self.model.name,
-                            sectionName=listener_name,
-                        )
-                    ],
-                    rules=[
-                        GRPCRouteRule(
-                            matches=route["matches"],  # Already charm GRPCRouteMatch models
-                            backendRefs=route["backend_refs"],  # Already charm BackendRef models
-                            filters=route["filters"] if route["filters"] else None,
-                        )
-                    ],
-                ),
-            )
+            grpc_route_resource = route.resource
+            grpc_route_resource.spec.parentRefs = [ParentRef(name=self.app.name,namespace=self.model.name,sectionName=listener_name)]
 
             # Convert to lightkube resource
             grpcroute_lk_resource = RESOURCE_TYPES["GRPCRoute"]
@@ -1476,7 +1453,9 @@ class IstioIngressCharm(CharmBase):
                 backend_ports.setdefault(key, set()).add(backend_ref.port)
 
         for route in grpc_routes:
-            for backend_ref in route["backend_refs"]:
+            backend_refs = route.resource.spec.rules[0].backendRefs
+            assert backend_refs is not None
+            for backend_ref in backend_refs:
                 key = (backend_ref.name, backend_ref.namespace)
                 backend_ports.setdefault(key, set()).add(backend_ref.port)
 
@@ -1505,7 +1484,9 @@ class IstioIngressCharm(CharmBase):
         seen_backends = set()
 
         for route in grpc_routes:
-            for backend_ref in route["backend_refs"]:
+            backend_refs = route.resource.spec.rules[0].backendRefs
+            assert backend_refs is not None
+            for backend_ref in backend_refs:
                 # One DR per unique (service, namespace) - not per port
                 backend_key = (backend_ref.name, backend_ref.namespace)
                 if backend_key not in seen_backends:

@@ -18,6 +18,9 @@ from canonical_service_mesh.models import (
     GatewayTLSConfig,
     GRPCMethodMatch,
     GRPCRouteMatch,
+    GRPCRouteResource,
+    GRPCRouteResourceSpec,
+    GRPCRouteRule,
     HTTPPathMatch,
     HTTPRouteMatch,
     HTTPRouteResource,
@@ -85,58 +88,31 @@ class RouteInfo(TypedDict):
     strip_prefix: bool
     prefix: Optional[str]
 
-# TODO: replace with HTTPRouteResource
-#class HTTPRoute(TypedDict):
-#    pass
-
 
 class HTTPRoute(BaseModel):
     """Normalized HTTPRoute data structure.
 
     All fields use charm models from models.py (K8s Gateway API format).
     """
+
     resource: HTTPRouteResource
     source_app: str
     source_relation: str
     listener_port: int
     listener_protocol: str  # Gateway protocol ("HTTP" or "HTTPS")
 
-#    # metadata.name
-#    name: str
-#    # as listener
-#    listener_port: int
-#    listener_protocol: str  # Gateway protocol ("HTTP" or "HTTPS")
-#
-#    # metadata.namespace
-#    namespace: str
-#
-#    # ???
-#
-#    # spec.rules[].matches
-#    matches: List[HTTPRouteMatch]
-#
-#    # spec.rules[].backendRefs
-#    backend_refs: List[BackendRef]
-#
-#    # spec.rules[].filters
-#    filters: List[HTTPRouteFilter]
 
-
-class GRPCRoute(TypedDict):
+class GRPCRoute(BaseModel):
     """Normalized GRPCRoute data structure.
 
     All fields use charm models from models.py (K8s Gateway API format).
     """
 
-    name: str
+    resource: GRPCRouteResource
     listener_port: int
     listener_protocol: str  # Gateway protocol ("HTTP" or "HTTPS")
-    namespace: str
     source_app: str
     source_relation: str
-    matches: List[GRPCRouteMatch]
-    backend_refs: List[BackendRef]
-    filters: List[GRPCRouteFilter]
 
 
 # ============================================================================
@@ -539,7 +515,7 @@ def normalize_istio_ingress_route_grpc_routes(
                 )
 
             # GRPCRouteFilter not yet implemented - leave empty for now
-            filters = []
+            filters: List[GRPCRouteFilter] = []
             # TODO: When GRPCRouteFilter is implemented, use:
             # filters = list(grpc_route.filters) if grpc_route.filters else []
 
@@ -551,15 +527,26 @@ def normalize_istio_ingress_route_grpc_routes(
 
             routes.append(
                 GRPCRoute(
-                    name=route_name,
+                    resource=GRPCRouteResource(
+                        metadata=Metadata(
+                            name=route_name,
+                            namespace=config.model,
+                        ),
+                        spec=GRPCRouteResourceSpec(
+                            parentRefs=[],
+                            rules=[
+                                GRPCRouteRule(
+                                    matches=matches,  # Already charm GRPCRouteMatch models
+                                    backendRefs=backend_refs,  # Already charm BackendRef models
+                                    filters=filters if filters else None,
+                                )
+                            ],
+                        ),
+                    ),
                     listener_port=grpc_route.listener.port,
                     listener_protocol=gateway_protocol,
-                    namespace=config.model,
                     source_app=app_name,
                     source_relation=relation_name,
-                    matches=matches,
-                    backend_refs=backend_refs,
-                    filters=filters,
                 )
             )
 
@@ -604,11 +591,6 @@ def deduplicate_listeners(all_listeners: List[Listener]) -> List[Listener]:
             seen[key] = listener
 
     return list(seen.values())
-
-
-def _get_first_rules_first_path(route: HTTPRoute) -> str:
-    matches = route.resource.spec.rules[0].matches
-    return matches[0].path.value if matches else "/"
 
 
 def deduplicate_http_routes(
@@ -678,7 +660,7 @@ def deduplicate_http_routes(
 
     for route in all_http_routes:
         # Extract path from first HTTPRouteMatch
-        path = _get_first_rules_first_path(route)
+        path = _get_first_rules_first_http_path(route)
         key = (route.listener_port, route.listener_protocol, path)
         route_groups[key].append(route)
 
@@ -771,16 +753,8 @@ def deduplicate_grpc_routes(
     route_groups: Dict[Tuple[int, str, str], List[GRPCRoute]] = defaultdict(list)
 
     for route in all_grpc_routes:
-        # Extract gRPC path from first GRPCRouteMatch
-        if route["matches"] and route["matches"][0].method:
-            method_match = route["matches"][0].method
-            service = method_match.service or ""
-            method = method_match.method or "*"
-            grpc_path = f"/{service}/{method}"
-        else:
-            grpc_path = "/*"
-
-        key = (route["listener_port"], route["listener_protocol"], grpc_path)
+        grpc_path = _get_first_rules_first_grpc_path(route)
+        key = (route.listener_port, route.listener_protocol, grpc_path)
         route_groups[key].append(route)
 
     valid_routes: List[GRPCRoute] = []
@@ -788,7 +762,7 @@ def deduplicate_grpc_routes(
 
     for key, routes in route_groups.items():
         # Get unique apps requesting this route
-        unique_apps = {(r["source_app"], r["source_relation"]) for r in routes}
+        unique_apps = {(r.source_app, r.source_relation) for r in routes}
 
         if len(unique_apps) > 1:
             # Conflict detected - multiple apps want the same route
@@ -968,3 +942,18 @@ def get_relation_by_name_and_app(relations, remote_app_name):
 def create_gateway_tls_config(tls_secret_name: str) -> GatewayTLSConfig:
     """Return a simple GatewayTLSConfig object based on the provided tls_secret_name."""
     return GatewayTLSConfig(certificateRefs=[SecretObjectReference(name=tls_secret_name)])
+
+def _get_first_rules_first_http_path(route: HTTPRoute) -> str:
+    matches = route.resource.spec.rules[0].matches
+    return matches[0].path.value if matches else "/"
+
+
+def _get_first_rules_first_grpc_path(route: GRPCRoute) -> str:
+    matches = route.resource.spec.rules[0].matches
+    if matches and matches[0].method:
+        method_match = matches[0].method
+        service = method_match.service or ""
+        method = method_match.method or "*"
+        return f"/{service}/{method}"
+    else:
+        return "/*"

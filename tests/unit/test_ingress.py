@@ -16,7 +16,7 @@ from charmlibs.interfaces.istio_ingress_route import (
     RequestRedirectFilter,
     RequestRedirectSpec,
 )
-from helpers import dict_to_httproute
+from helpers import dict_to_grpcroute, dict_to_httproute
 from ops import ActiveStatus, BlockedStatus
 
 from charm import IstioIngressCharm
@@ -254,7 +254,7 @@ def test_construct_auth_policies_mixed_http_grpc(istio_ingress_charm, istio_ingr
         }),
     ]
     grpc_routes = [
-        {
+        dict_to_grpcroute({
             "name": "myapp-grpc",
             "listener_port": 9000,
             "listener_protocol": "HTTP",
@@ -266,7 +266,7 @@ def test_construct_auth_policies_mixed_http_grpc(istio_ingress_charm, istio_ingr
             ],
             "backend_refs": [BackendRef(name="myapp", port=9000, namespace="test-ns")],
             "filters": [],
-        },
+        }),
     ]
 
     with istio_ingress_context(
@@ -768,6 +768,7 @@ def test_construct_grpc_destination_rules(istio_ingress_charm, istio_ingress_con
             "filters": [],
         },
     ]
+    grpc_routes = [ dict_to_grpcroute(r) for r in grpc_routes ]
 
     with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),

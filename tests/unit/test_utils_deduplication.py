@@ -27,7 +27,7 @@ from charmlibs.interfaces.istio_ingress_route import (
     Listener,
     ProtocolType,
 )
-from helpers import dict_to_httproute
+from helpers import dict_to_grpcroute, dict_to_httproute
 
 from utils import (
     clear_conflicting_routes,
@@ -162,6 +162,7 @@ def test_deduplicate_grpc_routes_no_conflicts():
             "backend_refs": [BackendRef(name="grpc-svc2", port=9000, namespace="model2")],
         },
     ]
+    all_grpc_routes = [ dict_to_grpcroute(r) for r in all_grpc_routes ]
 
     valid_routes, apps_to_clear = deduplicate_grpc_routes(all_grpc_routes)
 
@@ -210,6 +211,7 @@ def test_deduplicate_grpc_routes_with_conflicts():
             "backend_refs": [BackendRef(name="grpc-svc3", port=9000, namespace="model3")],
         },
     ]
+    all_grpc_routes = [ dict_to_grpcroute(r) for r in all_grpc_routes ]
 
     valid_routes, apps_to_clear = deduplicate_grpc_routes(all_grpc_routes)
 
@@ -221,7 +223,7 @@ def test_deduplicate_grpc_routes_with_conflicts():
 
     # Only route3 (OrderService) should remain
     assert len(valid_routes) == 1
-    assert valid_routes[0]["matches"][0].method.service == "OrderService"
+    assert valid_routes[0].resource.spec.rules[0].matches[0].method.service == "OrderService"
 
 
 def test_clear_conflicting_routes():
