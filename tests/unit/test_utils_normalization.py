@@ -222,11 +222,12 @@ def test_normalize_ipa_routes_with_strip_prefix():
 
     assert len(http_routes) == 1
     route = http_routes[0]
-    assert route["name"] == "svc1-httproute-http-80-istio-ingress-k8s"  # Name format: {service}-httproute-{section_name}-{ingress_app_name}
-    assert route["listener_port"] == 80
-    assert route["listener_protocol"] == "HTTP"
-    assert len(route["filters"]) == 1
-    assert route["filters"][0].type == FilterType.URLRewrite
+    assert route.resource.metadata.name == "svc1-httproute-http-80-istio-ingress-k8s"  # Name format: {service}-httproute-{section_name}-{ingress_app_name}
+    assert route.listener_port == 80
+    assert route.listener_protocol == "HTTP"
+    filters = route.resource.spec.rules[0].filters
+    assert len(filters) == 1
+    assert filters[0].type == FilterType.URLRewrite
 
 
 def test_normalize_ipa_routes_with_tls_creates_redirect():
@@ -254,26 +255,31 @@ def test_normalize_ipa_routes_with_tls_creates_redirect():
 
     # First route should be HTTP redirect
     redirect_route = http_routes[0]
-    assert redirect_route["name"] == "svc1-httproute-http-80-istio-ingress-k8s"
-    assert redirect_route["listener_port"] == 80
-    assert redirect_route["listener_protocol"] == "HTTP"
-    assert len(redirect_route["backend_refs"]) == 0  # No backends for redirect
-    assert len(redirect_route["filters"]) == 1
-    assert redirect_route["filters"][0].type == FilterType.RequestRedirect
-    assert redirect_route["filters"][0].requestRedirect.scheme == "https"
-    assert redirect_route["filters"][0].requestRedirect.statusCode == 301
+    assert redirect_route.resource.metadata.name == "svc1-httproute-http-80-istio-ingress-k8s"
+    assert redirect_route.listener_port == 80
+    assert redirect_route.listener_protocol == "HTTP"
+    assert len(redirect_route.resource.spec.rules[0].backendRefs) == 0  # No backends for redirect
+
+    filters = redirect_route.resource.spec.rules[0].filters
+    assert len(filters) == 1
+    assert filters[0].type == FilterType.RequestRedirect
+    assert filters[0].requestRedirect.scheme == "https"
+    assert filters[0].requestRedirect.statusCode == 301
 
     # Second route should be HTTPS with backends
     https_route = http_routes[1]
-    assert https_route["name"] == "svc1-httproute-https-443-istio-ingress-k8s"
-    assert https_route["listener_port"] == 443
-    assert https_route["listener_protocol"] == "HTTPS"
-    assert len(https_route["backend_refs"]) == 1
-    assert https_route["backend_refs"][0].name == "svc1"
-    assert https_route["backend_refs"][0].port == 8080
+    assert https_route.resource.metadata.name == "svc1-httproute-https-443-istio-ingress-k8s"
+    assert https_route.listener_port == 443
+    assert https_route.listener_protocol == "HTTPS"
+
+    backed_refs = https_route.resource.spec.rules[0].backendRefs
+    assert len(backed_refs) == 1
+    assert backed_refs[0].name == "svc1"
+    assert backed_refs[0].port == 8080
     # Should have URLRewrite filter because strip_prefix=True
-    assert len(https_route["filters"]) == 1
-    assert https_route["filters"][0].type == FilterType.URLRewrite
+    filters = https_route.resource.spec.rules[0].filters
+    assert len(filters) == 1
+    assert filters[0].type == FilterType.URLRewrite
 
 
 def test_normalize_istio_ingress_route_http_and_grpc_routes():
@@ -322,10 +328,10 @@ def test_normalize_istio_ingress_route_http_and_grpc_routes():
     # Verify HTTP route conversion
     assert len(http_routes) == 1
     http_route = http_routes[0]
-    assert http_route["name"] == "app1-http-route-httproute-http-8080-istio-ingress-k8s"  # Route name format: {app}-{route.name}-httproute-{section_name}-{ingress_app_name}
-    assert http_route["listener_port"] == 8080
-    assert http_route["source_relation"] == "istio-ingress-route"
-    assert len(http_route["matches"]) == 1
+    assert http_route.resource.metadata.name == "app1-http-route-httproute-http-8080-istio-ingress-k8s"  # Route name format: {app}-{route.name}-httproute-{section_name}-{ingress_app_name}
+    assert http_route.listener_port == 8080
+    assert http_route.source_relation == "istio-ingress-route"
+    assert len(http_route.resource.spec.rules[0].matches) == 1
 
     # Verify gRPC route conversion
     assert len(grpc_routes) == 1

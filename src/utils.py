@@ -20,7 +20,11 @@ from canonical_service_mesh.models import (
     GRPCRouteMatch,
     HTTPPathMatch,
     HTTPRouteMatch,
+    HTTPRouteResource,
+    HTTPRouteResourceSpec,
+    HTTPRouteRule,
     Listener,
+    Metadata,
     SecretObjectReference,
 )
 from charmlibs.interfaces.istio_ingress_route import (
@@ -33,6 +37,7 @@ from charmlibs.interfaces.istio_ingress_route import (
     to_gateway_protocol,
 )
 from ops import EventBase
+from pydantic import BaseModel
 
 HTTPRouteFilter = URLRewriteFilter | RequestRedirectFilter
 GRPCRouteFilter = RequestRedirectFilter
@@ -80,22 +85,41 @@ class RouteInfo(TypedDict):
     strip_prefix: bool
     prefix: Optional[str]
 
+# TODO: replace with HTTPRouteResource
+#class HTTPRoute(TypedDict):
+#    pass
 
-class HTTPRoute(TypedDict):
+
+class HTTPRoute(BaseModel):
     """Normalized HTTPRoute data structure.
 
     All fields use charm models from models.py (K8s Gateway API format).
     """
-
-    name: str
-    listener_port: int
-    listener_protocol: str  # Gateway protocol ("HTTP" or "HTTPS")
-    namespace: str
+    resource: HTTPRouteResource
     source_app: str
     source_relation: str
-    matches: List[HTTPRouteMatch]
-    backend_refs: List[BackendRef]
-    filters: List[HTTPRouteFilter]
+    listener_port: int
+    listener_protocol: str  # Gateway protocol ("HTTP" or "HTTPS")
+
+#    # metadata.name
+#    name: str
+#    # as listener
+#    listener_port: int
+#    listener_protocol: str  # Gateway protocol ("HTTP" or "HTTPS")
+#
+#    # metadata.namespace
+#    namespace: str
+#
+#    # ???
+#
+#    # spec.rules[].matches
+#    matches: List[HTTPRouteMatch]
+#
+#    # spec.rules[].backendRefs
+#    backend_refs: List[BackendRef]
+#
+#    # spec.rules[].filters
+#    filters: List[HTTPRouteFilter]
 
 
 class GRPCRoute(TypedDict):
@@ -228,19 +252,26 @@ def _create_http_redirect_route(
     )
 
     return HTTPRoute(
-        name=route_name,
+        resource=HTTPRouteResource(
+                metadata=Metadata(
+                    name=route_name,
+                    namespace=namespace,
+                ),
+                spec=HTTPRouteResourceSpec(
+                    parentRefs=[], # Maybe encode remaining fields here
+                    rules=[
+                        HTTPRouteRule(
+                            matches=[HTTPRouteMatch(path=HTTPPathMatch(type="PathPrefix", value=prefix))],  # Already charm HTTPRouteMatch models
+                            backendRefs=[],  # No backends for redirect routes
+                            filters=filters,
+                        )
+                    ],
+                ),
+            ),
         listener_port=80,
         listener_protocol="HTTP",
-        namespace=namespace,
         source_app=source_app,
         source_relation=source_relation,
-        matches=[
-            HTTPRouteMatch(
-                path=HTTPPathMatch(type="PathPrefix", value=prefix)
-            )
-        ],
-        backend_refs=[],  # No backends for redirect routes
-        filters=filters,
     )
 
 
@@ -310,15 +341,26 @@ def normalize_ipa_routes(
                 route_name = f"{route['service_name']}-httproute-{section_name}-{ingress_app_name}"
                 routes.append(
                     HTTPRoute(
-                        name=route_name,
+                        resource = HTTPRouteResource(
+                            metadata=Metadata(
+                                name=route_name,
+                                namespace=route["namespace"],
+                            ),
+                            spec=HTTPRouteResourceSpec(
+                                parentRefs=[],
+                                rules=[
+                                    HTTPRouteRule(
+                                        matches=matches,  # Already charm HTTPRouteMatch models
+                                        backendRefs=backend_refs,  # Already charm BackendRef models
+                                        filters=filters if filters else None,
+                                    )
+                                ],
+                            ),
+                        ),
                         listener_port=443,
                         listener_protocol="HTTPS",
-                        namespace=route["namespace"],
                         source_app=app_name,
                         source_relation=relation_name,
-                        matches=matches,
-                        backend_refs=backend_refs,
-                        filters=filters,
                     )
                 )
             else:
@@ -327,15 +369,26 @@ def normalize_ipa_routes(
                 route_name = f"{route['service_name']}-httproute-{section_name}-{ingress_app_name}"
                 routes.append(
                     HTTPRoute(
-                        name=route_name,
+                        resource = HTTPRouteResource(
+                            metadata=Metadata(
+                                name=route_name,
+                                namespace=route["namespace"],
+                            ),
+                            spec=HTTPRouteResourceSpec(
+                                parentRefs=[],
+                                rules=[
+                                    HTTPRouteRule(
+                                        matches=matches,  # Already charm HTTPRouteMatch models
+                                        backendRefs=backend_refs,  # Already charm BackendRef models
+                                        filters=filters if filters else None,
+                                    )
+                                ],
+                            ),
+                        ),
                         listener_port=80,
                         listener_protocol="HTTP",
-                        namespace=route["namespace"],
                         source_app=app_name,
                         source_relation=relation_name,
-                        matches=matches,
-                        backend_refs=backend_refs,
-                        filters=filters,
                     )
                 )
 
@@ -347,7 +400,7 @@ def normalize_istio_ingress_route_http_routes(
 ) -> List[HTTPRoute]:
     """Normalize istio-ingress-route HTTP routes to common format with complete conversion to charm models.
 
-    Converts library models (from istio_ingress_route relation) to charm Pydantic models (from models.py).
+    Converts library models (from istio_ingress_route relation) to charm Pydantic models.
     This ensures complete normalization to K8s Gateway API format.
 
     Args:
@@ -406,15 +459,26 @@ def normalize_istio_ingress_route_http_routes(
 
             routes.append(
                 HTTPRoute(
-                    name=route_name,
+                    resource = HTTPRouteResource(
+                        metadata=Metadata(
+                            name=route_name,
+                            namespace=config.model,
+                        ),
+                        spec=HTTPRouteResourceSpec(
+                            parentRefs=[],
+                            rules=[
+                                HTTPRouteRule(
+                                    matches=matches,  # Already charm HTTPRouteMatch models
+                                    backendRefs=backend_refs,  # Already charm BackendRef models
+                                    filters=filters if filters else None,
+                                )
+                            ],
+                        ),
+                    ),
                     listener_port=http_route.listener.port,
                     listener_protocol=gateway_protocol,
-                    namespace=config.model,
                     source_app=app_name,
                     source_relation=relation_name,
-                    matches=matches,
-                    backend_refs=backend_refs,
-                    filters=filters,
                 )
             )
 
@@ -542,6 +606,11 @@ def deduplicate_listeners(all_listeners: List[Listener]) -> List[Listener]:
     return list(seen.values())
 
 
+def _get_first_rules_first_path(route: HTTPRoute) -> str:
+    matches = route.resource.spec.rules[0].matches
+    return matches[0].path.value if matches else "/"
+
+
 def deduplicate_http_routes(
     all_http_routes: List[HTTPRoute],
 ) -> Tuple[List[HTTPRoute], Set[Tuple[str, str]]]:
@@ -602,7 +671,6 @@ def deduplicate_http_routes(
         Tuple of (valid_routes, apps_to_clear, has_conflicts) where:
         - valid_routes: List of non-conflicting routes
         - apps_to_clear: Set of (app_name, relation_name) tuples that have conflicts
-        - has_conflicts: True if any conflicts were detected (caller should set BlockedStatus)
     """
     # Group routes by (listener_port, listener_protocol, path)
     # Extract path from first match in matches list
@@ -610,8 +678,8 @@ def deduplicate_http_routes(
 
     for route in all_http_routes:
         # Extract path from first HTTPRouteMatch
-        path = route["matches"][0].path.value if route["matches"] else "/"
-        key = (route["listener_port"], route["listener_protocol"], path)
+        path = _get_first_rules_first_path(route)
+        key = (route.listener_port, route.listener_protocol, path)
         route_groups[key].append(route)
 
     valid_routes: List[HTTPRoute] = []
@@ -619,7 +687,7 @@ def deduplicate_http_routes(
 
     for key, routes in route_groups.items():
         # Get unique apps requesting this route
-        unique_apps = {(r["source_app"], r["source_relation"]) for r in routes}
+        unique_apps = {(r.source_app, r.source_relation) for r in routes}
 
         if len(unique_apps) > 1:
             # Conflict detected - multiple apps want the same route

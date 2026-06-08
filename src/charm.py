@@ -30,9 +30,6 @@ from canonical_service_mesh.models import (
     GRPCRouteResource,
     GRPCRouteResourceSpec,
     GRPCRouteRule,
-    HTTPRouteResource,
-    HTTPRouteResourceSpec,
-    HTTPRouteRule,
     IstioGatewayResource,
     IstioGatewaySpec,
     Listener,
@@ -1386,31 +1383,9 @@ class IstioIngressCharm(CharmBase):
 
         for route in http_routes:
             # Derive listener name from Gateway protocol and port
-            listener_name = f"{route['listener_protocol'].lower()}-{route['listener_port']}"
-
-            # Construct HTTPRoute resource from normalized data
-            http_route_resource = HTTPRouteResource(
-                metadata=Metadata(
-                    name=route["name"],
-                    namespace=route["namespace"],
-                ),
-                spec=HTTPRouteResourceSpec(
-                    parentRefs=[
-                        ParentRef(
-                            name=self.app.name,
-                            namespace=self.model.name,
-                            sectionName=listener_name,
-                        )
-                    ],
-                    rules=[
-                        HTTPRouteRule(
-                            matches=route["matches"],  # Already charm HTTPRouteMatch models
-                            backendRefs=route["backend_refs"],  # Already charm BackendRef models
-                            filters=route["filters"] if route["filters"] else None,
-                        )
-                    ],
-                ),
-            )
+            listener_name = f"{route.listener_protocol.lower()}-{route.listener_port}"
+            http_route_resource = route.resource
+            http_route_resource.spec.parentRefs = [ParentRef(name=self.app.name,namespace=self.model.name,sectionName=listener_name)]
 
             # Convert to lightkube resource
             httproute_lk_resource = RESOURCE_TYPES["HTTPRoute"]
@@ -1494,7 +1469,9 @@ class IstioIngressCharm(CharmBase):
         backend_ports: dict = {}
 
         for route in http_routes:
-            for backend_ref in route["backend_refs"]:
+            backend_refs = route.resource.spec.rules[0].backendRefs
+            assert backend_refs is not None
+            for backend_ref in backend_refs:
                 key = (backend_ref.name, backend_ref.namespace)
                 backend_ports.setdefault(key, set()).add(backend_ref.port)
 
