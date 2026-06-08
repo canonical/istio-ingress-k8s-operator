@@ -5,6 +5,13 @@ summary: A Juju charm to deploy and manage ingresses
 description: |
   Istio Ingress is a Juju charm for managing Istio ingress gateways in Kubernetes clusters.
   It automates deployment and configuration, providing secure and reliable traffic routing.
+
+links:
+  documentation: https://discourse.charmhub.io/t/istio-ingress-k8s-docs-index/20488
+  website: https://charmhub.io/istio-ingress-k8s
+  source: https://github.com/canonical/istio-ingress-k8s-operator
+  issues: https://github.com/canonical/istio-ingress-k8s-operator/issues
+
 assumes:
   - k8s-api
   - juju >= 3.6
