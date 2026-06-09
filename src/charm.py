@@ -635,11 +635,12 @@ class IstioIngressCharm(CharmBase):
             listener_name = f"{norm_listener.protocol.lower()}-{norm_listener.port}"
 
             # replace old placeholder values
-            norm_listener.name = listener_name
-            norm_listener.allowedRoutes = allowed_routes
-            norm_listener.hostname = hostname
-
-            listeners.append(norm_listener)
+            final_listener = norm_listener.model_copy(deep=True,update={
+                "name": listener_name,
+                "allowedRoutes": allowed_routes,
+                "hostname": hostname,
+            })
+            listeners.append(final_listener)
 
         gateway = IstioGatewayResource(
             metadata=Metadata(
@@ -1381,7 +1382,7 @@ class IstioIngressCharm(CharmBase):
         for route in http_routes:
             # Derive listener name from Gateway protocol and port
             listener_name = f"{route.listener_protocol.lower()}-{route.listener_port}"
-            http_route_resource = route.resource
+            http_route_resource = route.resource.model_copy(deep=True)
             http_route_resource.spec.parentRefs = [ParentRef(name=self.app.name,namespace=self.model.name,sectionName=listener_name)]
 
             # Convert to lightkube resource
@@ -1413,7 +1414,7 @@ class IstioIngressCharm(CharmBase):
             listener_name = f"{route.listener_protocol.lower()}-{route.listener_port}"
 
             # Construct GRPCRoute resource from normalized data
-            grpc_route_resource = route.resource
+            grpc_route_resource = route.resource.model_copy(deep=True)
             grpc_route_resource.spec.parentRefs = [ParentRef(name=self.app.name,namespace=self.model.name,sectionName=listener_name)]
 
             # Convert to lightkube resource
