@@ -79,6 +79,7 @@ peers:
 provides:
   ingress:
     interface: ingress
+    optional: true
     description: |
       Provides ingress-like routing to the related Juju application, load-balancing across all units.  If the ingress
       has authentication configured, all paths will have authentication applied to them.  Otherwise, the paths will be
@@ -87,6 +88,7 @@ provides:
       ingress of the same path, no route is created and the charm will go into a blocked state.
   ingress-unauthenticated:
     interface: ingress
+    optional: true
     description: |
       Provides ingress-like routing to the related Juju application, similar to the `ingress` relation.  Unlike
       the `ingress` relation, paths ingressed here will never have authentication applied to them, even if the ingress
@@ -95,14 +97,17 @@ provides:
       ingress of the same path, no route is created and the charm will go into a blocked state.
   metrics-endpoint:
     interface: prometheus_scrape
+    optional: true
   istio-ingress-config:
     interface: istio_ingress_config
+    optional: true
     limit: 1
     description: |
       Provides an interface for exchanging Istio ingress configuration,
       including external authorizer configuration details.
   istio-ingress-route:
     interface: istio_ingress_route
+    optional: true
     description: |
       Provides advanced ingress routing with support for multiple ports and protocols
       (HTTP, gRPC) using typed configuration models. Requirers can define custom
@@ -110,18 +115,21 @@ provides:
       all routes will have authentication applied to them.
   istio-ingress-route-unauthenticated:
     interface: istio_ingress_route
+    optional: true
     description: |
       Provides advanced ingress routing similar to istio-ingress-route, but routes
       will never have authentication applied to them, even if the ingress has
       authentication configured.
   gateway-metadata:
     interface: gateway_metadata
+    optional: true
     description: |
       Provides metadata about the Gateway workload including namespace, gateway name,
       deployment name, and service account. This allows related charms to reference
       the Gateway workload in their configurations (e.g., in AuthorizationPolicies).
   istio-request-auth:
     interface: istio_request_auth
+    optional: true
     description: |
       Allows related applications to configure JWT-based authentication via
       Istio RequestAuthentication. Each related app provides its JWT rules
@@ -131,19 +139,23 @@ provides:
 requires:
   certificates:
     interface: tls-certificates
+    optional: true
     limit: 1
     description: |
       Send a CSR to- and obtain a signed certificate from an external CA.
   charm-tracing:
     interface: tracing
+    optional: true
     limit: 1
     description: |
       Enables sending charm traces to a distributed tracing backend such as Tempo.
   forward-auth:
     interface: forward_auth
+    optional: true
     limit: 1
   upstream-ingress:
     interface: ingress
+    optional: true
     limit: 1
     description: |
       Configure to use an ingress upstream of this gateway. Useful when you want an internal
