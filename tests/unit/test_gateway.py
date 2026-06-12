@@ -6,6 +6,10 @@ from unittest.mock import MagicMock, PropertyMock, patch
 
 import pytest
 import scenario
+from canonical_service_mesh.models import (
+    AllowedRoutes,
+    Listener,
+)
 from charms.tls_certificates_interface.v3.tls_certificates import (
     generate_ca,
     generate_certificate,
@@ -18,13 +22,13 @@ from lightkube.resources.core_v1 import Secret
 from ops import ActiveStatus
 
 from charm import IstioIngressCharm
-from utils import GatewayListener
+from utils import create_gateway_tls_config
 
 
 def create_test_listeners(
-    ports=(80,), protocols=("HTTP",), tls_secret_names=(None,), source_apps=("test-app",)
+    ports=(80,), protocols=("HTTP",), tls_secret_names=(None,), source_apps=("test-app",), hostname=None
 ):
-    """Create normalized GatewayListener list for testing."""
+    """Create normalized Listener list for testing."""
     max_len = max(len(ports), len(protocols), len(tls_secret_names), len(source_apps))
     ports = ports + (ports[-1],) * (max_len - len(ports)) if ports else (80,) * max_len
     protocols = protocols + (protocols[-1],) * (max_len - len(protocols)) if protocols else ("HTTP",) * max_len
@@ -32,11 +36,13 @@ def create_test_listeners(
     source_apps = source_apps + (source_apps[-1],) * (max_len - len(source_apps)) if source_apps else ("test-app",) * max_len
 
     return [
-        GatewayListener(
+        Listener(
+            name=f"{protocol.lower()}-{port}",
             port=port,
-            gateway_protocol=protocol,
-            tls_secret_name=tls_secret_name,
-            source_app=source_app,
+            protocol=protocol,
+            allowedRoutes=AllowedRoutes(namespaces={}),
+            hostname=hostname,
+            tls=create_gateway_tls_config(tls_secret_name) if tls_secret_name else None,
         )
         for port, protocol, tls_secret_name, source_app in zip(
             ports, protocols, tls_secret_names, source_apps
@@ -76,8 +82,9 @@ def test_construct_gateway_with_loadbalancer_address(
         state=scenario.State(),
     ) as manager:
         charm = manager.charm
-        normalized_listeners = create_test_listeners()
+        normalized_listeners = create_test_listeners(hostname=charm._get_hostname_from_local_gateway_address())
         gateway = charm._construct_gateway(normalized_listeners)
+        print(gateway)
 
         # Assert that the Gateway has an http listener with the correct configurations
         _validate_gateway_listener(gateway, "http-80", hostname, tls_secret_name=None)
@@ -104,6 +111,7 @@ def test_construct_gateway_with_tls(
             ports=(80, 443),
             protocols=("HTTP", "HTTPS"),
             tls_secret_names=(None, tls_secret_name),
+            hostname=charm._get_hostname_from_local_gateway_address()
         )
         gateway = charm._construct_gateway(normalized_listeners)
 
@@ -190,6 +198,7 @@ def test_sync_gateway_resources_with_tls_with_loadbalancer_address(
             ports=(80, 443),
             protocols=("HTTP", "HTTPS"),
             tls_secret_names=(None, charm._certificate_secret_name),
+            hostname=charm._get_hostname_from_local_gateway_address()
         )
         charm._sync_gateway_resources(normalized_listeners)
 
@@ -229,6 +238,7 @@ def test_sync_gateway_resources_with_tls_with_external_hostname_config(
             ports=(80, 443),
             protocols=("HTTP", "HTTPS"),
             tls_secret_names=(None, charm._certificate_secret_name),
+            hostname=charm._get_hostname_from_local_gateway_address()
         )
         charm._sync_gateway_resources(normalized_listeners)
 

@@ -26,20 +26,12 @@ from canonical_service_mesh.k8s.resource_manager import (
 )
 from canonical_service_mesh.k8s.types.istio import AuthorizationPolicy
 from canonical_service_mesh.models import (
-    AllowedRoutes,
-    GatewayTLSConfig,
     GRPCRouteResource,
-    GRPCRouteResourceSpec,
-    GRPCRouteRule,
     HTTPRouteResource,
-    HTTPRouteResourceSpec,
-    HTTPRouteRule,
     IstioGatewayResource,
     IstioGatewaySpec,
     Listener,
     Metadata,
-    ParentRef,
-    SecretObjectReference,
 )
 from canonical_service_mesh.models.istio import (
     AuthorizationPolicySpec,
@@ -95,9 +87,6 @@ from utils import (
     ISTIO_INGRESS_ROUTE_AUTHENTICATED_NAME,
     ISTIO_INGRESS_ROUTE_UNAUTHENTICATED_NAME,
     DisabledCertHandler,
-    GatewayListener,
-    GRPCRoute,
-    HTTPRoute,
     RefreshCerts,
     RouteInfo,
     clear_conflicting_routes,
@@ -617,7 +606,7 @@ class IstioIngressCharm(CharmBase):
             },
         )
 
-    def _construct_gateway(self, normalized_listeners: List[GatewayListener]):
+    def _construct_gateway(self, normalized_listeners: List[Listener]):
         """Construct the Gateway resource from normalized listeners.
 
         This method constructs a Gateway from a list of normalized listeners that have already
@@ -633,31 +622,8 @@ class IstioIngressCharm(CharmBase):
         Returns:
             Gateway lightkube resource
         """
-        allowed_routes = AllowedRoutes(namespaces={"from": "All"})
         # Use local gateway address for the K8s Gateway resource hostname,
         # not the cascaded upstream address
-        hostname = self._local_gateway_address if self._is_valid_hostname(self._local_gateway_address) else None
-
-        listeners = []
-        for norm_listener in normalized_listeners:
-            # Derive listener name from Gateway protocol and port
-            listener_name = f"{norm_listener['gateway_protocol'].lower()}-{norm_listener['port']}"
-
-            listener = Listener(
-                name=listener_name,
-                port=norm_listener["port"],
-                protocol=norm_listener["gateway_protocol"],
-                allowedRoutes=allowed_routes,
-                hostname=hostname,
-            )
-
-            # Add TLS config if this is an HTTPS listener
-            if norm_listener["gateway_protocol"] == "HTTPS" and norm_listener["tls_secret_name"]:
-                listener.tls = GatewayTLSConfig(
-                    certificateRefs=[SecretObjectReference(name=norm_listener["tls_secret_name"])]
-                )
-
-            listeners.append(listener)
 
         gateway = IstioGatewayResource(
             metadata=Metadata(
@@ -667,7 +633,7 @@ class IstioIngressCharm(CharmBase):
             ),
             spec=IstioGatewaySpec(
                 gatewayClassName="istio",
-                listeners=listeners,
+                listeners=normalized_listeners,
             ),
         )
         gateway_resource = RESOURCE_TYPES["Gateway"]
@@ -791,21 +757,21 @@ class IstioIngressCharm(CharmBase):
     def _is_tls_enabled(self) -> bool:
         return self._construct_gateway_tls_secret() is not None
 
-    def _get_normalized_istio_routes(self) -> Tuple[List[HTTPRoute],List[GRPCRoute]]:
+    def _get_normalized_istio_routes(self) -> Tuple[List[HTTPRouteResource],List[GRPCRouteResource]]:
         """Return the normalized Istio routes."""
         is_tls_enabled = self._is_tls_enabled()
         istio_ingress_route_configs = self._get_istio_ingress_route_configs()
         istio_http_routes = normalize_istio_ingress_route_http_routes(
-            istio_ingress_route_configs, is_tls_enabled, self.app.name
+            istio_ingress_route_configs, is_tls_enabled, self.app.name, self.model.name
         )
         istio_grpc_routes = normalize_istio_ingress_route_grpc_routes(
-            istio_ingress_route_configs, is_tls_enabled, self.app.name
+            istio_ingress_route_configs, is_tls_enabled, self.app.name, self.model.name
         )
         return istio_http_routes, istio_grpc_routes
 
-    def _get_normalized_ipa_routes(self) -> List[HTTPRoute]:
+    def _get_normalized_ipa_routes(self) -> List[HTTPRouteResource]:
         """Return the normalized IPA routes from both sources."""
-        return normalize_ipa_routes(self._get_routes(), self._is_tls_enabled(), self.app.name)
+        return normalize_ipa_routes(self._get_routes(), self._is_tls_enabled(), self.app.name, self.model.name)
 
     def _convert_to_jwt_rules(self, interface_jwt_rules: list) -> List[JWTRule]:
         """Convert interface JWTRule models to Istio CRD JWTRule models."""
@@ -945,7 +911,22 @@ class IstioIngressCharm(CharmBase):
 
         policy_manager.reconcile(policies=[], mesh_type=MeshType.istio, raw_policies=resources)
 
-    def _sync_all_resources(self):
+
+    def _get_hostname_from_local_gateway_address(self) -> Optional[str]:
+        """Hostname based on the local gateway address."""
+        return self._local_gateway_address if self._is_valid_hostname(self._local_gateway_address) else None
+
+
+    def _get_all_listeners(self,tls_secret_name: Optional[str], istio_ingress_route_configs: Dict) -> Tuple[List[Listener],List[Listener]]:
+        """Return IPA and istio-ingress-route listeners."""
+        hostname = self._get_hostname_from_local_gateway_address()
+        ipa_listeners: List[Listener] = normalize_ipa_listeners(tls_secret_name,hostname)
+        istio_listeners: List[Listener] = normalize_istio_ingress_route_listeners(
+            istio_ingress_route_configs, tls_secret_name, hostname
+        )
+        return ipa_listeners, istio_listeners
+
+    def _sync_all_resources(self) -> None:
         """Synchronize all resources including authentication, gateway, ingress, and certificates.
 
         Flow:
@@ -989,10 +970,7 @@ class IstioIngressCharm(CharmBase):
         tls_secret_name = self._certificate_secret_name if self._is_tls_enabled() else None
 
         # Normalize listeners from both sources
-        ipa_listeners = normalize_ipa_listeners(tls_secret_name)
-        istio_listeners = normalize_istio_ingress_route_listeners(
-            istio_ingress_route_configs, tls_secret_name
-        )
+        ipa_listeners, istio_listeners = self._get_all_listeners(tls_secret_name,istio_ingress_route_configs)
 
         # Normalize routes from both sources
         ipa_http_routes = self._get_normalized_ipa_routes()
@@ -1354,7 +1332,7 @@ class IstioIngressCharm(CharmBase):
         resources = [self._construct_external_traffic_auth_policy(ip_blocks)]
         policy_manager.reconcile(policies=[], mesh_type=MeshType.istio, raw_policies=resources)
 
-    def _sync_gateway_resources(self, normalized_listeners: List[GatewayListener]):
+    def _sync_gateway_resources(self, normalized_listeners: List[Listener]):
         """Synchronize Gateway resources using normalized listeners.
 
         Args:
@@ -1383,7 +1361,7 @@ class IstioIngressCharm(CharmBase):
         # Without MERGE, Server-Side Apply accumulates stale listeners and preserves omitted fields.
         krm.reconcile(resources_list, patch_type=PatchType.MERGE)
 
-    def _construct_httproutes(self, http_routes: List[HTTPRoute]) -> List:
+    def _construct_httproutes(self, http_routes: List[HTTPRouteResource]) -> List:
         """Construct HTTPRoute K8s resources from normalized HTTP routes.
 
         This method is fully source-agnostic - normalized data already contains charm models.
@@ -1397,45 +1375,18 @@ class IstioIngressCharm(CharmBase):
         httproutes = []
 
         for route in http_routes:
-            # Derive listener name from Gateway protocol and port
-            listener_name = f"{route['listener_protocol'].lower()}-{route['listener_port']}"
-
-            # Construct HTTPRoute resource from normalized data
-            http_route_resource = HTTPRouteResource(
-                metadata=Metadata(
-                    name=route["name"],
-                    namespace=route["namespace"],
-                ),
-                spec=HTTPRouteResourceSpec(
-                    parentRefs=[
-                        ParentRef(
-                            name=self.app.name,
-                            namespace=self.model.name,
-                            sectionName=listener_name,
-                        )
-                    ],
-                    rules=[
-                        HTTPRouteRule(
-                            matches=route["matches"],  # Already charm HTTPRouteMatch models
-                            backendRefs=route["backend_refs"],  # Already charm BackendRef models
-                            filters=route["filters"] if route["filters"] else None,
-                        )
-                    ],
-                ),
-            )
-
             # Convert to lightkube resource
             httproute_lk_resource = RESOURCE_TYPES["HTTPRoute"]
             httproutes.append(
                 httproute_lk_resource(
-                    metadata=ObjectMeta.from_dict(http_route_resource.metadata.model_dump()),
-                    spec=http_route_resource.spec.model_dump(exclude_none=True),
+                    metadata=ObjectMeta.from_dict(route.metadata.model_dump()),
+                    spec=route.spec.model_dump(exclude_none=True),
                 )
             )
 
         return httproutes
 
-    def _construct_grpcroutes(self, grpc_routes: List[GRPCRoute]) -> List:
+    def _construct_grpcroutes(self, grpc_routes: List[GRPCRouteResource]) -> List:
         """Construct GRPCRoute K8s resources from normalized gRPC routes.
 
         This method is fully source-agnostic - normalized data already contains charm models.
@@ -1449,46 +1400,19 @@ class IstioIngressCharm(CharmBase):
         grpcroutes = []
 
         for route in grpc_routes:
-            # Derive listener name from Gateway protocol and port
-            listener_name = f"{route['listener_protocol'].lower()}-{route['listener_port']}"
-
-            # Construct GRPCRoute resource from normalized data
-            grpc_route_resource = GRPCRouteResource(
-                metadata=Metadata(
-                    name=route["name"],
-                    namespace=route["namespace"],
-                ),
-                spec=GRPCRouteResourceSpec(
-                    parentRefs=[
-                        ParentRef(
-                            name=self.app.name,
-                            namespace=self.model.name,
-                            sectionName=listener_name,
-                        )
-                    ],
-                    rules=[
-                        GRPCRouteRule(
-                            matches=route["matches"],  # Already charm GRPCRouteMatch models
-                            backendRefs=route["backend_refs"],  # Already charm BackendRef models
-                            filters=route["filters"] if route["filters"] else None,
-                        )
-                    ],
-                ),
-            )
-
             # Convert to lightkube resource
             grpcroute_lk_resource = RESOURCE_TYPES["GRPCRoute"]
             grpcroutes.append(
                 grpcroute_lk_resource(
-                    metadata=ObjectMeta.from_dict(grpc_route_resource.metadata.model_dump()),
-                    spec=grpc_route_resource.spec.model_dump(exclude_none=True),
+                    metadata=ObjectMeta.from_dict(route.metadata.model_dump()),
+                    spec=route.spec.model_dump(exclude_none=True),
                 )
             )
 
         return grpcroutes
 
     def _construct_auth_policies(
-        self, http_routes: List[HTTPRoute], grpc_routes: List[GRPCRoute]
+        self, http_routes: List[HTTPRouteResource], grpc_routes: List[GRPCRouteResource]
     ) -> List:
         """Construct L4 authorization policies from normalized routes.
 
@@ -1506,12 +1430,16 @@ class IstioIngressCharm(CharmBase):
         backend_ports: dict = {}
 
         for route in http_routes:
-            for backend_ref in route["backend_refs"]:
+            backend_refs = route.spec.rules[0].backendRefs
+            assert backend_refs is not None
+            for backend_ref in backend_refs:
                 key = (backend_ref.name, backend_ref.namespace)
                 backend_ports.setdefault(key, set()).add(backend_ref.port)
 
         for route in grpc_routes:
-            for backend_ref in route["backend_refs"]:
+            backend_refs = route.spec.rules[0].backendRefs
+            assert backend_refs is not None
+            for backend_ref in backend_refs:
                 key = (backend_ref.name, backend_ref.namespace)
                 backend_ports.setdefault(key, set()).add(backend_ref.port)
 
@@ -1524,7 +1452,7 @@ class IstioIngressCharm(CharmBase):
             for (name, namespace), ports in backend_ports.items()
         ]
 
-    def _construct_grpc_destination_rules(self, grpc_routes: List[GRPCRoute]) -> List:
+    def _construct_grpc_destination_rules(self, grpc_routes: List[GRPCRouteResource]) -> List:
         """Construct DestinationRules for gRPC backends.
 
         Creates one DestinationRule per unique (service, namespace) backend
@@ -1540,7 +1468,9 @@ class IstioIngressCharm(CharmBase):
         seen_backends = set()
 
         for route in grpc_routes:
-            for backend_ref in route["backend_refs"]:
+            backend_refs = route.spec.rules[0].backendRefs
+            assert backend_refs is not None
+            for backend_ref in backend_refs:
                 # One DR per unique (service, namespace) - not per port
                 backend_key = (backend_ref.name, backend_ref.namespace)
                 if backend_key not in seen_backends:
@@ -1573,7 +1503,7 @@ class IstioIngressCharm(CharmBase):
 
         return destination_rules
 
-    def _sync_ingress_resources(self, http_routes: List[HTTPRoute], grpc_routes: List[GRPCRoute]):
+    def _sync_ingress_resources(self, http_routes: List[HTTPRouteResource], grpc_routes: List[GRPCRouteResource]):
         """Synchronize all ingress resources (HTTPRoutes, GRPCRoutes, and L4 auth policies) from normalized data.
 
         This method works on normalized, deduplicated routes from all sources (IPA and istio-ingress-route).

@@ -3,6 +3,10 @@
 
 """Tests for utils.py normalization functions."""
 
+from canonical_service_mesh.models import (
+    AllowedRoutes,
+    Listener,
+)
 from charmlibs.interfaces.istio_ingress_route import (
     BackendRef as LibBackendRef,
 )
@@ -10,7 +14,6 @@ from charmlibs.interfaces.istio_ingress_route import (
     FilterType,
     GRPCMethodMatch,
     IstioIngressRouteConfig,
-    Listener,
     ProtocolType,
 )
 from charmlibs.interfaces.istio_ingress_route import (
@@ -28,9 +31,16 @@ from charmlibs.interfaces.istio_ingress_route import (
 from charmlibs.interfaces.istio_ingress_route import (
     HTTPRouteMatch as LibHTTPRouteMatch,
 )
+from charmlibs.interfaces.istio_ingress_route import (
+    Listener as LibListener,
+)
 
 from utils import (
+    create_gateway_tls_config,
     deduplicate_listeners,
+    get_listener_port_from_label,
+    get_listener_protocol_from_label,
+    get_requesting_app_and_relation_forom_label,
     get_unauthenticated_paths,
     get_unauthenticated_paths_from_istio_ingress_route_configs,
     normalize_ipa_listeners,
@@ -45,36 +55,36 @@ def test_normalize_ipa_listeners_without_tls():
     """Test normalizing IPA listeners without TLS creates single HTTP listener."""
     tls_secret_name = None
 
-    listeners = normalize_ipa_listeners(tls_secret_name)
+    listeners = normalize_ipa_listeners(tls_secret_name,hostname="example.com")
 
     assert len(listeners) == 1
-    assert listeners[0]["port"] == 80
-    assert listeners[0]["gateway_protocol"] == "HTTP"
-    assert listeners[0]["tls_secret_name"] is None
-    assert listeners[0]["source_app"] == "ipa"
+    assert listeners[0].port == 80
+    assert listeners[0].protocol == "HTTP"
+    assert listeners[0].tls is None
 
 
 def test_normalize_ipa_listeners_with_tls():
     """Test normalizing IPA listeners with TLS creates HTTP and HTTPS listeners."""
     tls_secret_name = "my-tls-secret"
 
-    listeners = normalize_ipa_listeners(tls_secret_name)
+    listeners = normalize_ipa_listeners(tls_secret_name,hostname="example.com")
 
     assert len(listeners) == 2
-    http_listener = [listener for listener in listeners if listener["port"] == 80][0]
-    https_listener = [listener for listener in listeners if listener["port"] == 443][0]
+    http_listener = [listener for listener in listeners if listener.port == 80][0]
+    https_listener = [listener for listener in listeners if listener.port == 443][0]
 
-    assert http_listener["gateway_protocol"] == "HTTP"
-    assert http_listener["tls_secret_name"] is None
+    assert http_listener.protocol == "HTTP"
+    assert http_listener.tls is None
 
-    assert https_listener["gateway_protocol"] == "HTTPS"
-    assert https_listener["tls_secret_name"] == "my-tls-secret"
+    assert https_listener.protocol == "HTTPS"
+    assert https_listener.tls is not None
+    assert https_listener.tls.certificateRefs[0].name == "my-tls-secret"
 
 
 def test_normalize_istio_ingress_route_listeners_without_tls():
     """Test normalizing istio-ingress-route listeners without TLS for HTTP and gRPC."""
-    http_listener = Listener(port=8080, protocol=ProtocolType.HTTP)
-    grpc_listener = Listener(port=9090, protocol=ProtocolType.GRPC)
+    http_listener = LibListener(port=8080, protocol=ProtocolType.HTTP)
+    grpc_listener = LibListener(port=9090, protocol=ProtocolType.GRPC)
 
     istio_ingress_route_configs = {
         ("app1", "istio-ingress-route"): {
@@ -107,23 +117,23 @@ def test_normalize_istio_ingress_route_listeners_without_tls():
     tls_secret_name = None
 
     listeners = normalize_istio_ingress_route_listeners(
-        istio_ingress_route_configs, tls_secret_name
+        istio_ingress_route_configs, tls_secret_name, hostname="example.com"
     )
 
     assert len(listeners) == 2
-    http_listener_norm = [listener for listener in listeners if listener["port"] == 8080][0]
-    grpc_listener_norm = [listener for listener in listeners if listener["port"] == 9090][0]
+    http_listener_norm = [listener for listener in listeners if listener.port == 8080][0]
+    grpc_listener_norm = [listener for listener in listeners if listener.port == 9090][0]
 
-    assert http_listener_norm["gateway_protocol"] == "HTTP"
-    assert http_listener_norm["tls_secret_name"] is None
-    assert grpc_listener_norm["gateway_protocol"] == "HTTP"
-    assert grpc_listener_norm["tls_secret_name"] is None
+    assert http_listener_norm.protocol == "HTTP"
+    assert http_listener_norm.tls is None
+    assert grpc_listener_norm.protocol == "HTTP"
+    assert grpc_listener_norm.tls is None
 
 
 def test_normalize_istio_ingress_route_listeners_with_tls():
     """Test normalizing istio-ingress-route listeners with TLS converts to HTTPS."""
-    http_listener = Listener(port=8080, protocol=ProtocolType.HTTP)
-    grpc_listener = Listener(port=9090, protocol=ProtocolType.GRPC)
+    http_listener = LibListener(port=8080, protocol=ProtocolType.HTTP)
+    grpc_listener = LibListener(port=9090, protocol=ProtocolType.GRPC)
 
     istio_ingress_route_configs = {
         ("app1", "istio-ingress-route"): {
@@ -156,45 +166,41 @@ def test_normalize_istio_ingress_route_listeners_with_tls():
     tls_secret_name = "my-tls-secret"
 
     listeners = normalize_istio_ingress_route_listeners(
-        istio_ingress_route_configs, tls_secret_name
+        istio_ingress_route_configs, tls_secret_name, hostname="example.com"
     )
 
     # Should have 2 listeners converted to HTTPS: 8080 HTTPS, 9090 HTTPS
     assert len(listeners) == 2
 
-    https_8080 = [listener for listener in listeners if listener["port"] == 8080][0]
-    https_9090 = [listener for listener in listeners if listener["port"] == 9090][0]
+    https_8080 = [listener for listener in listeners if listener.port == 8080][0]
+    https_9090 = [listener for listener in listeners if listener.port == 9090][0]
 
-    assert https_8080["gateway_protocol"] == "HTTPS"
-    assert https_8080["tls_secret_name"] == "my-tls-secret"
-    assert https_9090["gateway_protocol"] == "HTTPS"
-    assert https_9090["tls_secret_name"] == "my-tls-secret"
+    assert https_8080.protocol == "HTTPS"
+    assert https_8080.tls is not None
+    assert https_8080.tls.certificateRefs[0].name == "my-tls-secret"
+
+    assert https_9090.protocol == "HTTPS"
+    assert https_9090.tls is not None
+    assert https_9090.tls.certificateRefs[0].name == "my-tls-secret"
 
 
 def test_merge_listeners_with_duplicates():
     """Test merging listeners keeps first occurrence for each port/protocol."""
-    listeners = [
-        {"port": 80, "gateway_protocol": "HTTP", "tls_secret_name": None, "source_app": "app1"},
-        {"port": 80, "gateway_protocol": "HTTP", "tls_secret_name": None, "source_app": "app2"},
-        {
-            "port": 443,
-            "gateway_protocol": "HTTPS",
-            "tls_secret_name": "tls",
-            "source_app": "app1",
-        },
-    ]
+    l1 = Listener(name="app1",port=80,protocol="HTTP",allowedRoutes=AllowedRoutes(namespaces={}),tls=None)
+    l2 = Listener(name="app2",port=80,protocol="HTTP",allowedRoutes=AllowedRoutes(namespaces={}),tls=None)
+    l3 = Listener(name="app1",port=443,protocol="HTTPS",allowedRoutes=AllowedRoutes(namespaces={}),tls=create_gateway_tls_config("tls"))
 
-    merged = deduplicate_listeners(listeners)
+    merged = deduplicate_listeners([l1,l2,l3])
 
     # Should deduplicate port 80 HTTP to a single listener (first one)
     assert len(merged) == 2
-    assert merged[0]["port"] == 80
-    assert merged[0]["gateway_protocol"] == "HTTP"
-    assert merged[0]["source_app"] == "app1"  # First occurrence wins
+    assert merged[0].port == 80
+    assert merged[0].protocol == "HTTP"
+    assert merged[0].name == "app1"  # First occurrence wins
 
-    assert merged[1]["port"] == 443
-    assert merged[1]["gateway_protocol"] == "HTTPS"
-    assert merged[1]["source_app"] == "app1"
+    assert merged[1].port == 443
+    assert merged[1].protocol == "HTTPS"
+    assert merged[1].name == "app1"
 
 
 def test_normalize_ipa_routes_with_strip_prefix():
@@ -215,15 +221,16 @@ def test_normalize_ipa_routes_with_strip_prefix():
     is_tls_enabled = False
     ingress_app_name = "istio-ingress-k8s"
 
-    http_routes = normalize_ipa_routes(ipa_relations, is_tls_enabled, ingress_app_name)
+    http_routes = normalize_ipa_routes(ipa_relations, is_tls_enabled, ingress_app_name, ingress_model_name="xyz")
 
     assert len(http_routes) == 1
     route = http_routes[0]
-    assert route["name"] == "svc1-httproute-http-80-istio-ingress-k8s"  # Name format: {service}-httproute-{section_name}-{ingress_app_name}
-    assert route["listener_port"] == 80
-    assert route["listener_protocol"] == "HTTP"
-    assert len(route["filters"]) == 1
-    assert route["filters"][0].type == FilterType.URLRewrite
+    assert route.metadata.name == "svc1-httproute-http-80-istio-ingress-k8s"  # Name format: {service}-httproute-{section_name}-{ingress_app_name}
+    assert get_listener_port_from_label(route.metadata) == 80
+    assert get_listener_protocol_from_label(route.metadata) == "HTTP"
+    filters = route.spec.rules[0].filters
+    assert len(filters) == 1
+    assert filters[0].type == FilterType.URLRewrite
 
 
 def test_normalize_ipa_routes_with_tls_creates_redirect():
@@ -244,39 +251,44 @@ def test_normalize_ipa_routes_with_tls_creates_redirect():
     is_tls_enabled = True
     ingress_app_name = "istio-ingress-k8s"
 
-    http_routes = normalize_ipa_routes(ipa_relations, is_tls_enabled, ingress_app_name)
+    http_routes = normalize_ipa_routes(ipa_relations, is_tls_enabled, ingress_app_name, ingress_model_name="xyz")
 
     # Should create 2 routes: HTTP redirect + HTTPS actual
     assert len(http_routes) == 2
 
     # First route should be HTTP redirect
     redirect_route = http_routes[0]
-    assert redirect_route["name"] == "svc1-httproute-http-80-istio-ingress-k8s"
-    assert redirect_route["listener_port"] == 80
-    assert redirect_route["listener_protocol"] == "HTTP"
-    assert len(redirect_route["backend_refs"]) == 0  # No backends for redirect
-    assert len(redirect_route["filters"]) == 1
-    assert redirect_route["filters"][0].type == FilterType.RequestRedirect
-    assert redirect_route["filters"][0].requestRedirect.scheme == "https"
-    assert redirect_route["filters"][0].requestRedirect.statusCode == 301
+    assert redirect_route.metadata.name == "svc1-httproute-http-80-istio-ingress-k8s"
+    assert get_listener_port_from_label(redirect_route.metadata) == 80
+    assert get_listener_protocol_from_label(redirect_route.metadata) == "HTTP"
+    assert len(redirect_route.spec.rules[0].backendRefs) == 0  # No backends for redirect
+
+    filters = redirect_route.spec.rules[0].filters
+    assert len(filters) == 1
+    assert filters[0].type == FilterType.RequestRedirect
+    assert filters[0].requestRedirect.scheme == "https"
+    assert filters[0].requestRedirect.statusCode == 301
 
     # Second route should be HTTPS with backends
     https_route = http_routes[1]
-    assert https_route["name"] == "svc1-httproute-https-443-istio-ingress-k8s"
-    assert https_route["listener_port"] == 443
-    assert https_route["listener_protocol"] == "HTTPS"
-    assert len(https_route["backend_refs"]) == 1
-    assert https_route["backend_refs"][0].name == "svc1"
-    assert https_route["backend_refs"][0].port == 8080
+    assert https_route.metadata.name == "svc1-httproute-https-443-istio-ingress-k8s"
+    assert get_listener_port_from_label(https_route.metadata) == 443
+    assert get_listener_protocol_from_label(https_route.metadata) == "HTTPS"
+
+    backed_refs = https_route.spec.rules[0].backendRefs
+    assert len(backed_refs) == 1
+    assert backed_refs[0].name == "svc1"
+    assert backed_refs[0].port == 8080
     # Should have URLRewrite filter because strip_prefix=True
-    assert len(https_route["filters"]) == 1
-    assert https_route["filters"][0].type == FilterType.URLRewrite
+    filters = https_route.spec.rules[0].filters
+    assert len(filters) == 1
+    assert filters[0].type == FilterType.URLRewrite
 
 
 def test_normalize_istio_ingress_route_http_and_grpc_routes():
     """Test normalizing istio-ingress-route converts library models to charm models."""
-    http_listener = Listener(port=8080, protocol=ProtocolType.HTTP)
-    grpc_listener = Listener(port=9090, protocol=ProtocolType.GRPC)
+    http_listener = LibListener(port=8080, protocol=ProtocolType.HTTP)
+    grpc_listener = LibListener(port=9090, protocol=ProtocolType.GRPC)
 
     istio_ingress_route_configs = {
         ("app1", "istio-ingress-route"): {
@@ -310,27 +322,27 @@ def test_normalize_istio_ingress_route_http_and_grpc_routes():
     ingress_app_name = "istio-ingress-k8s"
 
     http_routes = normalize_istio_ingress_route_http_routes(
-        istio_ingress_route_configs, is_tls_enabled, ingress_app_name
+        istio_ingress_route_configs, is_tls_enabled, ingress_app_name, ingress_model_name="xyz"
     )
     grpc_routes = normalize_istio_ingress_route_grpc_routes(
-        istio_ingress_route_configs, is_tls_enabled, ingress_app_name
+        istio_ingress_route_configs, is_tls_enabled, ingress_app_name, ingress_model_name="xyz"
     )
 
     # Verify HTTP route conversion
     assert len(http_routes) == 1
     http_route = http_routes[0]
-    assert http_route["name"] == "app1-http-route-httproute-http-8080-istio-ingress-k8s"  # Route name format: {app}-{route.name}-httproute-{section_name}-{ingress_app_name}
-    assert http_route["listener_port"] == 8080
-    assert http_route["source_relation"] == "istio-ingress-route"
-    assert len(http_route["matches"]) == 1
+    assert http_route.metadata.name == "app1-http-route-httproute-http-8080-istio-ingress-k8s"  # Route name format: {app}-{route.name}-httproute-{section_name}-{ingress_app_name}
+    assert get_listener_port_from_label(http_route.metadata) == 8080
+    assert get_requesting_app_and_relation_forom_label(http_route.metadata)[1] == "istio-ingress-route"
+    assert len(http_route.spec.rules[0].matches) == 1
 
     # Verify gRPC route conversion
     assert len(grpc_routes) == 1
     grpc_route = grpc_routes[0]
-    assert grpc_route["name"] == "app1-grpc-route-grpcroute-http-9090-istio-ingress-k8s"  # Route name format: {app}-{route.name}-grpcroute-{section_name}-{ingress_app_name}
-    assert grpc_route["listener_port"] == 9090
-    assert grpc_route["source_relation"] == "istio-ingress-route"
-    assert len(grpc_route["matches"]) == 1
+    assert grpc_route.metadata.name == "app1-grpc-route-grpcroute-http-9090-istio-ingress-k8s"  # Route name format: {app}-{route.name}-grpcroute-{section_name}-{ingress_app_name}
+    assert get_listener_port_from_label(grpc_route.metadata) == 9090
+    assert get_requesting_app_and_relation_forom_label(grpc_route.metadata)[1] == "istio-ingress-route"
+    assert len(grpc_route.spec.rules[0].matches) == 1
 
 
 def test_get_unauthenticated_paths():
@@ -350,8 +362,8 @@ def test_get_unauthenticated_paths():
 
 def test_get_unauthenticated_paths_from_istio_ingress_route():
     """Test extracting unauthenticated paths from istio-ingress-route for HTTP and gRPC."""
-    http_listener = Listener(port=8080, protocol=ProtocolType.HTTP)
-    grpc_listener = Listener(port=9090, protocol=ProtocolType.GRPC)
+    http_listener = LibListener(port=8080, protocol=ProtocolType.HTTP)
+    grpc_listener = LibListener(port=9090, protocol=ProtocolType.GRPC)
 
     istio_ingress_route_configs = {
         ("app1", "istio-ingress-route-unauthenticated"): {

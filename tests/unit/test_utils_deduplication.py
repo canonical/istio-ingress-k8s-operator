@@ -27,8 +27,13 @@ from charmlibs.interfaces.istio_ingress_route import (
     Listener,
     ProtocolType,
 )
+from helpers import dict_to_grpcroute, dict_to_httproute
 
-from utils import clear_conflicting_routes, deduplicate_grpc_routes, deduplicate_http_routes
+from utils import (
+    clear_conflicting_routes,
+    deduplicate_grpc_routes,
+    deduplicate_http_routes,
+)
 
 
 def test_deduplicate_http_routes_no_conflicts():
@@ -68,6 +73,7 @@ def test_deduplicate_http_routes_no_conflicts():
             "filters": [],
         },
     ]
+    all_http_routes = [ dict_to_httproute(d) for d in all_http_routes ]
 
     valid_routes, apps_to_clear = deduplicate_http_routes(all_http_routes)
 
@@ -114,6 +120,7 @@ def test_deduplicate_http_routes_with_conflicts():
         },
     ]
 
+    all_http_routes = [ dict_to_httproute(d) for d in all_http_routes ]
     valid_routes, apps_to_clear = deduplicate_http_routes(all_http_routes)
 
     # Conflict: app1 and app2 both want /api on HTTP:80
@@ -124,7 +131,7 @@ def test_deduplicate_http_routes_with_conflicts():
 
     # Only route3 (/users) should remain
     assert len(valid_routes) == 1
-    assert valid_routes[0]["matches"][0].path.value == "/users"
+    assert valid_routes[0].spec.rules[0].matches[0].path.value == "/users"
 
 
 def test_deduplicate_grpc_routes_no_conflicts():
@@ -155,6 +162,7 @@ def test_deduplicate_grpc_routes_no_conflicts():
             "backend_refs": [BackendRef(name="grpc-svc2", port=9000, namespace="model2")],
         },
     ]
+    all_grpc_routes = [ dict_to_grpcroute(r) for r in all_grpc_routes ]
 
     valid_routes, apps_to_clear = deduplicate_grpc_routes(all_grpc_routes)
 
@@ -203,6 +211,7 @@ def test_deduplicate_grpc_routes_with_conflicts():
             "backend_refs": [BackendRef(name="grpc-svc3", port=9000, namespace="model3")],
         },
     ]
+    all_grpc_routes = [ dict_to_grpcroute(r) for r in all_grpc_routes ]
 
     valid_routes, apps_to_clear = deduplicate_grpc_routes(all_grpc_routes)
 
@@ -214,7 +223,7 @@ def test_deduplicate_grpc_routes_with_conflicts():
 
     # Only route3 (OrderService) should remain
     assert len(valid_routes) == 1
-    assert valid_routes[0]["matches"][0].method.service == "OrderService"
+    assert valid_routes[0].spec.rules[0].matches[0].method.service == "OrderService"
 
 
 def test_clear_conflicting_routes():

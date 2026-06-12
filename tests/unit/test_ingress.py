@@ -11,16 +11,18 @@ from canonical_service_mesh.models import (
     GRPCRouteMatch,
     HTTPPathMatch,
     HTTPRouteMatch,
+    ParentRef,
 )
 from charmlibs.interfaces.istio_ingress_route import (
     RequestRedirectFilter,
     RequestRedirectSpec,
 )
+from helpers import dict_to_grpcroute, dict_to_httproute
 from ops import ActiveStatus, BlockedStatus
 
 from charm import IstioIngressCharm
 from tests.unit.test_gateway import generate_certificates_relation
-from utils import HTTPRoute, RouteInfo, get_unauthenticated_paths
+from utils import RouteInfo, get_unauthenticated_paths
 
 
 def create_test_http_routes(routes_info, with_tls=False):
@@ -30,74 +32,77 @@ def create_test_http_routes(routes_info, with_tls=False):
         if with_tls:
             # When TLS is enabled, HTTP route (port 80) should be a redirect
             http_routes.append(
-                HTTPRoute(
-                    name=route_info["service_name"],
-                    listener_port=80,
-                    listener_protocol="HTTP",
-                    namespace=route_info["namespace"],
-                    source_app=route_info["service_name"],
-                    source_relation="ingress",
-                    matches=[
+                dict_to_httproute({
+                    "name": route_info["service_name"],
+                    "listener_port": 80,
+                    "listener_protocol": "HTTP",
+                    "namespace": route_info["namespace"],
+                    "source_app": route_info["service_name"],
+                    "source_relation": "ingress",
+                    "matches": [
                         HTTPRouteMatch(
                             path=HTTPPathMatch(type="PathPrefix", value=route_info["prefix"])
                         )
                     ],
-                    backend_refs=[],  # Redirects don't have backends
-                    filters=[
+                    "backend_refs": [],  # Redirects don't have backends
+                    "filters": [
                         RequestRedirectFilter(
                             requestRedirect=RequestRedirectSpec(scheme="https", statusCode=301)
                         )
                     ],
-                )
+                    "parentRefs": [ParentRef(name="fake-ingress_app_name",namespace="fake-ingress_model_name",sectionName='http-80')],
+                })
             )
             # HTTPS route on port 443 with actual backend
             http_routes.append(
-                HTTPRoute(
-                    name=route_info["service_name"] + "-https",
-                    listener_port=443,
-                    listener_protocol="HTTPS",
-                    namespace=route_info["namespace"],
-                    source_app=route_info["service_name"],
-                    source_relation="ingress",
-                    matches=[
+                dict_to_httproute({
+                    "name": route_info["service_name"] + "-https",
+                    "listener_port": 443,
+                    "listener_protocol": "HTTPS",
+                    "namespace": route_info["namespace"],
+                    "source_app": route_info["service_name"],
+                    "source_relation": "ingress",
+                    "matches": [
                         HTTPRouteMatch(
                             path=HTTPPathMatch(type="PathPrefix", value=route_info["prefix"])
                         )
                     ],
-                    backend_refs=[
+                    "backend_refs": [
                         BackendRef(
                             name=route_info["service_name"],
                             port=route_info["port"],
                             namespace=route_info["namespace"],
                         )
                     ],
-                    filters=[],
-                )
+                    "filters": [],
+                    "parentRefs": [ParentRef(name="fake-ingress_app_name",namespace="fake-ingress_model_name",sectionName='https-443')],
+                })
             )
         else:
             # Without TLS, just create normal HTTP route on port 80
             http_routes.append(
-                HTTPRoute(
-                    name=route_info["service_name"],
-                    listener_port=80,
-                    listener_protocol="HTTP",
-                    namespace=route_info["namespace"],
-                    source_app=route_info["service_name"],
-                    source_relation="ingress",
-                    matches=[
+                dict_to_httproute({
+                    "name": route_info["service_name"],
+                    "listener_port": 80,
+                    "listener_protocol": "HTTP",
+                    "namespace": route_info["namespace"],
+                    "source_app": route_info["service_name"],
+                    "source_relation": "ingress",
+                    "matches": [
                         HTTPRouteMatch(
                             path=HTTPPathMatch(type="PathPrefix", value=route_info["prefix"])
                         )
                     ],
-                    backend_refs=[
+                    "backend_refs": [
                         BackendRef(
                             name=route_info["service_name"],
                             port=route_info["port"],
                             namespace=route_info["namespace"],
                         )
                     ],
-                    filters=[],
-                )
+                    "filters": [],
+                    "parentRefs": [ParentRef(name="fake-ingress_app_name",namespace="fake-ingress_model_name",sectionName='http-80')],
+                })
             )
     return http_routes
 
@@ -145,60 +150,61 @@ def test_construct_auth_policies_multi_port_aggregation(istio_ingress_charm, ist
     """Test that _construct_auth_policies aggregates multiple ports for the same backend into a single policy."""
     # Create routes that simulate the Tempo scenario: same service, different ports
     http_routes = [
-        HTTPRoute(
-            name="tempo-api",
-            listener_port=80,
-            listener_protocol="HTTP",
-            namespace="cos",
-            source_app="tempo",
-            source_relation="istio-ingress-route",
-            matches=[
+        {
+            "name": "tempo-api",
+            "listener_port": 80,
+            "listener_protocol": "HTTP",
+            "namespace": "cos",
+            "source_app": "tempo",
+            "source_relation": "istio-ingress-route",
+            "matches": [
                 HTTPRouteMatch(path=HTTPPathMatch(type="PathPrefix", value="/tempo-api"))
             ],
-            backend_refs=[BackendRef(name="tempo", port=3200, namespace="cos")],
-            filters=[],
-        ),
-        HTTPRoute(
-            name="tempo-otlp-http",
-            listener_port=80,
-            listener_protocol="HTTP",
-            namespace="cos",
-            source_app="tempo",
-            source_relation="istio-ingress-route",
-            matches=[
+            "backend_refs": [BackendRef(name="tempo", port=3200, namespace="cos")],
+            "filters": [],
+        },
+        {
+            "name": "tempo-otlp-http",
+            "listener_port": 80,
+            "listener_protocol": "HTTP",
+            "namespace": "cos",
+            "source_app": "tempo",
+            "source_relation": "istio-ingress-route",
+            "matches": [
                 HTTPRouteMatch(path=HTTPPathMatch(type="PathPrefix", value="/tempo-otlp"))
             ],
-            backend_refs=[BackendRef(name="tempo", port=4318, namespace="cos")],
-            filters=[],
-        ),
-        HTTPRoute(
-            name="tempo-zipkin",
-            listener_port=80,
-            listener_protocol="HTTP",
-            namespace="cos",
-            source_app="tempo",
-            source_relation="istio-ingress-route",
-            matches=[
+            "backend_refs": [BackendRef(name="tempo", port=4318, namespace="cos")],
+            "filters": [],
+        },
+        {
+            "name": "tempo-zipkin",
+            "listener_port": 80,
+            "listener_protocol": "HTTP",
+            "namespace": "cos",
+            "source_app": "tempo",
+            "source_relation": "istio-ingress-route",
+            "matches": [
                 HTTPRouteMatch(path=HTTPPathMatch(type="PathPrefix", value="/tempo-zipkin"))
             ],
-            backend_refs=[BackendRef(name="tempo", port=9411, namespace="cos")],
-            filters=[],
-        ),
+            "backend_refs": [BackendRef(name="tempo", port=9411, namespace="cos")],
+            "filters": [],
+        },
         # A different service in the same namespace with a single port
-        HTTPRoute(
-            name="grafana-route",
-            listener_port=80,
-            listener_protocol="HTTP",
-            namespace="cos",
-            source_app="grafana",
-            source_relation="istio-ingress-route",
-            matches=[
+        {
+            "name": "grafana-route",
+            "listener_port": 80,
+            "listener_protocol": "HTTP",
+            "namespace": "cos",
+            "source_app": "grafana",
+            "source_relation": "istio-ingress-route",
+            "matches": [
                 HTTPRouteMatch(path=HTTPPathMatch(type="PathPrefix", value="/grafana"))
             ],
-            backend_refs=[BackendRef(name="grafana", port=3000, namespace="cos")],
-            filters=[],
-        ),
+            "backend_refs": [BackendRef(name="grafana", port=3000, namespace="cos")],
+            "filters": [],
+        },
     ]
+    http_routes = [ dict_to_httproute(r) for r in http_routes ]
 
     with istio_ingress_context(
         istio_ingress_context.on.update_status(),
@@ -237,22 +243,22 @@ def test_construct_auth_policies_multi_port_aggregation(istio_ingress_charm, ist
 def test_construct_auth_policies_mixed_http_grpc(istio_ingress_charm, istio_ingress_context):
     """Test that _construct_auth_policies aggregates ports across HTTP and gRPC routes for the same backend."""
     http_routes = [
-        HTTPRoute(
-            name="myapp-http",
-            listener_port=80,
-            listener_protocol="HTTP",
-            namespace="test-ns",
-            source_app="myapp",
-            source_relation="istio-ingress-route",
-            matches=[
+        dict_to_httproute({
+            "name": "myapp-http",
+            "listener_port": 80,
+            "listener_protocol": "HTTP",
+            "namespace": "test-ns",
+            "source_app": "myapp",
+            "source_relation": "istio-ingress-route",
+            "matches": [
                 HTTPRouteMatch(path=HTTPPathMatch(type="PathPrefix", value="/myapp"))
             ],
-            backend_refs=[BackendRef(name="myapp", port=8080, namespace="test-ns")],
-            filters=[],
-        ),
+            "backend_refs": [BackendRef(name="myapp", port=8080, namespace="test-ns")],
+            "filters": [],
+        }),
     ]
     grpc_routes = [
-        {
+        dict_to_grpcroute({
             "name": "myapp-grpc",
             "listener_port": 9000,
             "listener_protocol": "HTTP",
@@ -264,7 +270,7 @@ def test_construct_auth_policies_mixed_http_grpc(istio_ingress_charm, istio_ingr
             ],
             "backend_refs": [BackendRef(name="myapp", port=9000, namespace="test-ns")],
             "filters": [],
-        },
+        }),
     ]
 
     with istio_ingress_context(
@@ -766,6 +772,7 @@ def test_construct_grpc_destination_rules(istio_ingress_charm, istio_ingress_con
             "filters": [],
         },
     ]
+    grpc_routes = [ dict_to_grpcroute(r) for r in grpc_routes ]
 
     with patch.object(IstioIngressCharm, "_is_ready"), istio_ingress_context(
         istio_ingress_context.on.update_status(),

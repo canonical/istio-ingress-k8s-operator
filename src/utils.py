@@ -13,11 +13,23 @@ from collections import defaultdict
 from typing import Dict, List, Optional, Set, Tuple, TypedDict
 
 from canonical_service_mesh.models import (
+    AllowedRoutes,
     BackendRef,
+    GatewayTLSConfig,
     GRPCMethodMatch,
     GRPCRouteMatch,
+    GRPCRouteResource,
+    GRPCRouteResourceSpec,
+    GRPCRouteRule,
     HTTPPathMatch,
     HTTPRouteMatch,
+    HTTPRouteResource,
+    HTTPRouteResourceSpec,
+    HTTPRouteRule,
+    Listener,
+    Metadata,
+    ParentRef,
+    SecretObjectReference,
 )
 from charmlibs.interfaces.istio_ingress_route import (
     PathModifier,
@@ -43,7 +55,10 @@ INGRESS_AUTHENTICATED_NAME = "ingress"
 INGRESS_UNAUTHENTICATED_NAME = "ingress-unauthenticated"
 ISTIO_INGRESS_ROUTE_AUTHENTICATED_NAME = "istio-ingress-route"
 ISTIO_INGRESS_ROUTE_UNAUTHENTICATED_NAME = "istio-ingress-route-unauthenticated"
-
+ROUTE_LISTENER_PORT_LABEL = "istio-ingress.juju.is/listener_port"
+ROUTE_LISTENER_PROTOCOL_LABEL = "istio-ingress.juju.is/listener_protocol"
+ROUTE_SOURCE_APP_LABEL = "istio-ingress.juju.is/source_app"
+ROUTE_SOURCE_RELATION_LABEL = "istio-ingress.juju.is/source_relation"
 
 # ============================================================================
 # Exception Classes
@@ -77,79 +92,41 @@ class RouteInfo(TypedDict):
     prefix: Optional[str]
 
 
-class GatewayListener(TypedDict):
-    """Normalized Gateway listener data structure."""
-
-    port: int
-    gateway_protocol: str
-    tls_secret_name: Optional[str]
-    source_app: str
-
-
-class HTTPRoute(TypedDict):
-    """Normalized HTTPRoute data structure.
-
-    All fields use charm models from models.py (K8s Gateway API format).
-    """
-
-    name: str
-    listener_port: int
-    listener_protocol: str  # Gateway protocol ("HTTP" or "HTTPS")
-    namespace: str
-    source_app: str
-    source_relation: str
-    matches: List[HTTPRouteMatch]
-    backend_refs: List[BackendRef]
-    filters: List[HTTPRouteFilter]
-
-
-class GRPCRoute(TypedDict):
-    """Normalized GRPCRoute data structure.
-
-    All fields use charm models from models.py (K8s Gateway API format).
-    """
-
-    name: str
-    listener_port: int
-    listener_protocol: str  # Gateway protocol ("HTTP" or "HTTPS")
-    namespace: str
-    source_app: str
-    source_relation: str
-    matches: List[GRPCRouteMatch]
-    backend_refs: List[BackendRef]
-    filters: List[GRPCRouteFilter]
-
-
 # ============================================================================
 # Adapters
 # ============================================================================
-def normalize_ipa_listeners(tls_secret_name: Optional[str]) -> List[GatewayListener]:
+def normalize_ipa_listeners(tls_secret_name: Optional[str], hostname: Optional[str]) -> List[Listener]:
     """Normalize IPA listeners to common format.
 
     IPA always uses standard ports: 80 for HTTP, 443 for HTTPS.
 
     Args:
         tls_secret_name: Name of TLS secret if TLS is enabled
+        hostname: the hostname to be used with the generated Listeners
 
     Returns:
         List of normalized listeners (http-80, and https-443 if TLS enabled)
     """
-    listeners: List[GatewayListener] = [
-        GatewayListener(
+    listeners: List[Listener] = [
+        Listener(
+            name="http-80",
             port=80,
-            gateway_protocol="HTTP",
-            tls_secret_name=None,
-            source_app="ipa",
+            protocol="HTTP",
+            allowedRoutes=AllowedRoutes(namespaces={"from": "All"}),
+            hostname=hostname,
+            tls=None,
         )
     ]
 
     if tls_secret_name:
         listeners.append(
-            GatewayListener(
+            Listener(
+                name="",
                 port=443,
-                gateway_protocol="HTTPS",
-                tls_secret_name=tls_secret_name,
-                source_app="ipa",
+                protocol="HTTPS",
+                allowedRoutes=AllowedRoutes(namespaces={"from": "All"}),
+                hostname=hostname,
+                tls=create_gateway_tls_config(tls_secret_name)
             )
         )
 
@@ -157,20 +134,21 @@ def normalize_ipa_listeners(tls_secret_name: Optional[str]) -> List[GatewayListe
 
 
 def normalize_istio_ingress_route_listeners(
-    istio_ingress_route_configs: dict, tls_secret_name: Optional[str]
-) -> List[GatewayListener]:
+    istio_ingress_route_configs: dict, tls_secret_name: Optional[str], hostname: Optional[str]
+) -> List[Listener]:
     """Normalize istio-ingress-route listeners to common format.
 
     Args:
         istio_ingress_route_configs: Dict mapping (app_name, relation_name) to config data
         tls_secret_name: Name of TLS secret if TLS is enabled
+        hostname: the hostname to be used with the generated Listeners
 
     Returns:
         List of normalized listeners
     """
-    listeners: List[GatewayListener] = []
+    listeners: List[Listener] = []
 
-    for (app_name, relation_name), config_data in istio_ingress_route_configs.items():
+    for (app_name, _), config_data in istio_ingress_route_configs.items():
         config = config_data["config"]
         if not config:
             continue
@@ -181,12 +159,18 @@ def normalize_istio_ingress_route_listeners(
                 listener.protocol, tls_enabled=tls_secret_name is not None
             )
 
+            tls_config = None
+            if tls_secret_name is not None:
+                tls_config = create_gateway_tls_config(tls_secret_name)
+
             listeners.append(
-                GatewayListener(
+                Listener(
+                    name="",
                     port=listener.port,
-                    gateway_protocol=gateway_protocol,
-                    tls_secret_name=tls_secret_name if gateway_protocol == "HTTPS" else None,
-                    source_app=app_name,
+                    protocol=gateway_protocol,
+                    allowedRoutes=AllowedRoutes(namespaces={"from": "All"}),
+                    hostname=hostname,
+                    tls=tls_config,
                 )
             )
 
@@ -200,7 +184,8 @@ def _create_http_redirect_route(
     source_app: str,
     source_relation: str,
     ingress_app_name: str,
-) -> HTTPRoute:
+    ingress_model_name: str
+) -> HTTPRouteResource:
     """Create an HTTP->HTTPS redirect route between the standard http-80 and https-443 listeners.
 
     Args:
@@ -210,6 +195,7 @@ def _create_http_redirect_route(
         source_app: Source application name
         source_relation: Source relation name
         ingress_app_name: Name of the ingress charm app
+        ingress_model_name: Name of the ingress charm's model
 
     Returns:
         HTTPRoute with RequestRedirect filter
@@ -224,26 +210,35 @@ def _create_http_redirect_route(
         )  # https redirection without port spec will always redirect to the standard 443 port.
     )
 
-    return HTTPRoute(
-        name=route_name,
-        listener_port=80,
-        listener_protocol="HTTP",
-        namespace=namespace,
-        source_app=source_app,
-        source_relation=source_relation,
-        matches=[
-            HTTPRouteMatch(
-                path=HTTPPathMatch(type="PathPrefix", value=prefix)
-            )
-        ],
-        backend_refs=[],  # No backends for redirect routes
-        filters=filters,
+    return HTTPRouteResource(
+        metadata=Metadata(
+            name=route_name,
+            namespace=namespace,
+            labels={
+                ROUTE_LISTENER_PORT_LABEL: "80",
+                ROUTE_LISTENER_PROTOCOL_LABEL: "HTTP",
+                ROUTE_SOURCE_APP_LABEL: source_app,
+                ROUTE_SOURCE_RELATION_LABEL: source_relation
+            }
+        ),
+        spec=HTTPRouteResourceSpec(
+            parentRefs=[
+                ParentRef(name=ingress_app_name,namespace=ingress_model_name,sectionName=section_name),
+            ],
+            rules=[
+                HTTPRouteRule(
+                    matches=[HTTPRouteMatch(path=HTTPPathMatch(type="PathPrefix", value=prefix))],  # Already charm HTTPRouteMatch models
+                    backendRefs=[],  # No backends for redirect routes
+                    filters=filters,
+                )
+            ],
+        ),
     )
 
 
 def normalize_ipa_routes(
-    application_route_data: dict, is_tls_enabled: bool, ingress_app_name: str
-) -> List[HTTPRoute]:
+    application_route_data: dict, is_tls_enabled: bool, ingress_app_name: str, ingress_model_name: str
+) -> List[HTTPRouteResource]:
     """Normalize IPA routes to common format with complete conversion to charm models.
 
     Converts IPA raw route data to fully normalized K8s Gateway API format using charm Pydantic models.
@@ -253,11 +248,12 @@ def normalize_ipa_routes(
         application_route_data: Dict mapping (app_name, relation_name) to route data
         is_tls_enabled: Whether TLS is enabled
         ingress_app_name: Name of the ingress charm app (used in route naming)
+        ingress_model_name: Name of the ingress charm's model
 
     Returns:
         List of normalized HTTP routes with charm models (HTTPRouteMatch, BackendRef, HTTPRouteFilter)
     """
-    routes: List[HTTPRoute] = []
+    routes: List[HTTPRouteResource] = []
 
     for (app_name, relation_name), route_data in application_route_data.items():
         for route in route_data["routes"]:
@@ -299,6 +295,7 @@ def normalize_ipa_routes(
                         source_app=app_name,
                         source_relation=relation_name,
                         ingress_app_name=ingress_app_name,
+                        ingress_model_name=ingress_model_name
                     )
                 )
 
@@ -306,33 +303,59 @@ def normalize_ipa_routes(
                 section_name = "https-443"
                 route_name = f"{route['service_name']}-httproute-{section_name}-{ingress_app_name}"
                 routes.append(
-                    HTTPRoute(
-                        name=route_name,
-                        listener_port=443,
-                        listener_protocol="HTTPS",
-                        namespace=route["namespace"],
-                        source_app=app_name,
-                        source_relation=relation_name,
-                        matches=matches,
-                        backend_refs=backend_refs,
-                        filters=filters,
-                    )
+                    HTTPRouteResource(
+                        metadata=Metadata(
+                            name=route_name,
+                            namespace=route["namespace"],
+                            labels={
+                                ROUTE_LISTENER_PORT_LABEL: "443",
+                                ROUTE_LISTENER_PROTOCOL_LABEL: "HTTPS",
+                                ROUTE_SOURCE_APP_LABEL: app_name,
+                                ROUTE_SOURCE_RELATION_LABEL: relation_name,
+                            }
+                        ),
+                        spec=HTTPRouteResourceSpec(
+                            parentRefs=[
+                                ParentRef(name=ingress_app_name,namespace=ingress_model_name,sectionName=section_name)
+                            ],
+                            rules=[
+                                HTTPRouteRule(
+                                    matches=matches,  # Already charm HTTPRouteMatch models
+                                    backendRefs=backend_refs,  # Already charm BackendRef models
+                                    filters=filters if filters else None,
+                                )
+                            ],
+                        ),
+                    ),
                 )
             else:
                 # Create HTTP route
                 section_name = "http-80"
                 route_name = f"{route['service_name']}-httproute-{section_name}-{ingress_app_name}"
                 routes.append(
-                    HTTPRoute(
-                        name=route_name,
-                        listener_port=80,
-                        listener_protocol="HTTP",
-                        namespace=route["namespace"],
-                        source_app=app_name,
-                        source_relation=relation_name,
-                        matches=matches,
-                        backend_refs=backend_refs,
-                        filters=filters,
+                    HTTPRouteResource(
+                        metadata=Metadata(
+                            name=route_name,
+                            namespace=route["namespace"],
+                            labels={
+                                ROUTE_LISTENER_PORT_LABEL: "80",
+                                ROUTE_LISTENER_PROTOCOL_LABEL: "HTTP",
+                                ROUTE_SOURCE_APP_LABEL: app_name,
+                                ROUTE_SOURCE_RELATION_LABEL: relation_name,
+                            }
+                        ),
+                        spec=HTTPRouteResourceSpec(
+                            parentRefs=[
+                                ParentRef(name=ingress_app_name,namespace=ingress_model_name,sectionName=section_name)
+                            ],
+                            rules=[
+                                HTTPRouteRule(
+                                    matches=matches,  # Already charm HTTPRouteMatch models
+                                    backendRefs=backend_refs,  # Already charm BackendRef models
+                                    filters=filters if filters else None,
+                                )
+                            ],
+                        ),
                     )
                 )
 
@@ -340,22 +363,23 @@ def normalize_ipa_routes(
 
 
 def normalize_istio_ingress_route_http_routes(
-    istio_ingress_route_configs: dict, is_tls_enabled: bool, ingress_app_name: str
-) -> List[HTTPRoute]:
+    istio_ingress_route_configs: dict, is_tls_enabled: bool, ingress_app_name: str, ingress_model_name: str
+) -> List[HTTPRouteResource]:
     """Normalize istio-ingress-route HTTP routes to common format with complete conversion to charm models.
 
-    Converts library models (from istio_ingress_route relation) to charm Pydantic models (from models.py).
+    Converts library models (from istio_ingress_route relation) to charm Pydantic models.
     This ensures complete normalization to K8s Gateway API format.
 
     Args:
         istio_ingress_route_configs: Dict mapping (app_name, relation_name) to config data
         is_tls_enabled: Whether TLS is enabled
         ingress_app_name: Name of the ingress charm app (used in route naming)
+        ingress_model_name: Name of the ingress charm's model
 
     Returns:
         List of normalized HTTP routes with charm models (HTTPRouteMatch, BackendRef, HTTPRouteFilter)
     """
-    routes: List[HTTPRoute] = []
+    routes: List[HTTPRouteResource] = []
 
     for (app_name, relation_name), config_data in istio_ingress_route_configs.items():
         config = config_data["config"]
@@ -402,16 +426,29 @@ def normalize_istio_ingress_route_http_routes(
             route_name = f"{app_name}-{http_route.name}-httproute-{section_name}-{ingress_app_name}"
 
             routes.append(
-                HTTPRoute(
-                    name=route_name,
-                    listener_port=http_route.listener.port,
-                    listener_protocol=gateway_protocol,
-                    namespace=config.model,
-                    source_app=app_name,
-                    source_relation=relation_name,
-                    matches=matches,
-                    backend_refs=backend_refs,
-                    filters=filters,
+                HTTPRouteResource(
+                    metadata=Metadata(
+                        name=route_name,
+                        namespace=config.model,
+                        labels={
+                            ROUTE_LISTENER_PORT_LABEL: str(http_route.listener.port),
+                            ROUTE_LISTENER_PROTOCOL_LABEL: gateway_protocol,
+                            ROUTE_SOURCE_APP_LABEL: app_name,
+                            ROUTE_SOURCE_RELATION_LABEL: relation_name,
+                        }
+                    ),
+                    spec=HTTPRouteResourceSpec(
+                        parentRefs=[
+                            ParentRef(name=ingress_app_name,namespace=ingress_model_name,sectionName=section_name)
+                        ],
+                        rules=[
+                            HTTPRouteRule(
+                                matches=matches,  # Already charm HTTPRouteMatch models
+                                backendRefs=backend_refs,  # Already charm BackendRef models
+                                filters=filters if filters else None,
+                            )
+                        ],
+                    ),
                 )
             )
 
@@ -419,8 +456,8 @@ def normalize_istio_ingress_route_http_routes(
 
 
 def normalize_istio_ingress_route_grpc_routes(
-    istio_ingress_route_configs: dict, is_tls_enabled: bool, ingress_app_name: str
-) -> List[GRPCRoute]:
+    istio_ingress_route_configs: dict, is_tls_enabled: bool, ingress_app_name: str, ingress_model_name: str
+) -> List[GRPCRouteResource]:
     """Normalize istio-ingress-route gRPC routes to common format with complete conversion to charm models.
 
     Converts library models (from istio_ingress_route relation) to charm Pydantic models (from models.py).
@@ -430,11 +467,12 @@ def normalize_istio_ingress_route_grpc_routes(
         istio_ingress_route_configs: Dict mapping (app_name, relation_name) to config data
         is_tls_enabled: Whether TLS is enabled
         ingress_app_name: Name of the ingress charm app (used in route naming)
+        ingress_model_name: Name of the ingress charm's model
 
     Returns:
         List of normalized gRPC routes with charm models (GRPCRouteMatch, BackendRef, HTTPRouteFilter)
     """
-    routes: List[GRPCRoute] = []
+    routes: List[GRPCRouteResource] = []
 
     for (app_name, relation_name), config_data in istio_ingress_route_configs.items():
         config = config_data["config"]
@@ -472,7 +510,7 @@ def normalize_istio_ingress_route_grpc_routes(
                 )
 
             # GRPCRouteFilter not yet implemented - leave empty for now
-            filters = []
+            filters: List[GRPCRouteFilter] = []
             # TODO: When GRPCRouteFilter is implemented, use:
             # filters = list(grpc_route.filters) if grpc_route.filters else []
 
@@ -483,16 +521,29 @@ def normalize_istio_ingress_route_grpc_routes(
             route_name = f"{app_name}-{grpc_route.name}-grpcroute-{section_name}-{ingress_app_name}"
 
             routes.append(
-                GRPCRoute(
-                    name=route_name,
-                    listener_port=grpc_route.listener.port,
-                    listener_protocol=gateway_protocol,
-                    namespace=config.model,
-                    source_app=app_name,
-                    source_relation=relation_name,
-                    matches=matches,
-                    backend_refs=backend_refs,
-                    filters=filters,
+                GRPCRouteResource(
+                    metadata=Metadata(
+                        name=route_name,
+                        namespace=config.model,
+                        labels={
+                            ROUTE_LISTENER_PORT_LABEL: str(grpc_route.listener.port),
+                            ROUTE_LISTENER_PROTOCOL_LABEL: gateway_protocol,
+                            ROUTE_SOURCE_APP_LABEL: app_name,
+                            ROUTE_SOURCE_RELATION_LABEL: relation_name,
+                        }
+                    ),
+                    spec=GRPCRouteResourceSpec(
+                        parentRefs=[
+                            ParentRef(name=ingress_app_name,namespace=ingress_model_name,sectionName=section_name)
+                        ],
+                        rules=[
+                            GRPCRouteRule(
+                                matches=matches,  # Already charm GRPCRouteMatch models
+                                backendRefs=backend_refs,  # Already charm BackendRef models
+                                filters=filters if filters else None,
+                            )
+                        ],
+                    ),
                 )
             )
 
@@ -502,7 +553,7 @@ def normalize_istio_ingress_route_grpc_routes(
 # ============================================================================
 # Generic Processing Functions (work on normalized data)
 # ============================================================================
-def deduplicate_listeners(all_listeners: List[GatewayListener]) -> List[GatewayListener]:
+def deduplicate_listeners(all_listeners: List[Listener]) -> List[Listener]:
     """Merge listeners by deduplicating on (port, gateway_protocol).
 
     Keeps the first occurrence of each unique (port, protocol) combination.
@@ -510,17 +561,17 @@ def deduplicate_listeners(all_listeners: List[GatewayListener]) -> List[GatewayL
 
     For example, given input:
         [
-            _GatewayListener(port=80, gateway_protocol="HTTP", source_app="ipa", ...),
-            _GatewayListener(port=443, gateway_protocol="HTTPS", source_app="ipa", ...),
-            _GatewayListener(port=80, gateway_protocol="HTTP", source_app="app1", ...),  # Duplicate
-            _GatewayListener(port=8080, gateway_protocol="HTTP", source_app="app2", ...),
+            Listener(port=80, protocol="HTTP", name="x", ...),
+            Listener(port=443, protocol="HTTPS", ...),
+            Listener(port=80, protocol="HTTP", name="y" ...),  # Duplicate
+            Listener(port=8080, protocol="HTTP", ...),
         ]
 
     This function would return:
         [
-            _GatewayListener(port=80, gateway_protocol="HTTP", source_app="ipa", ...),    # First wins
-            _GatewayListener(port=443, gateway_protocol="HTTPS", source_app="ipa", ...),
-            _GatewayListener(port=8080, gateway_protocol="HTTP", source_app="app2", ...),
+            Listener(port=80, protocol="HTTP", name="x", ...),    # First wins
+            Listener(port=443, protocol="HTTPS", ...),
+            Listener(port=8080, protocol="HTTP", ...),
         ]
 
     Args:
@@ -529,10 +580,10 @@ def deduplicate_listeners(all_listeners: List[GatewayListener]) -> List[GatewayL
     Returns:
         List of unique listeners (first occurrence wins for each unique port/protocol pair)
     """
-    seen: Dict[Tuple[int, str], GatewayListener] = {}
+    seen: Dict[Tuple[int, str], Listener] = {}
 
     for listener in all_listeners:
-        key = (listener["port"], listener["gateway_protocol"])
+        key = (listener.port, listener.protocol)
         if key not in seen:
             seen[key] = listener
 
@@ -540,8 +591,8 @@ def deduplicate_listeners(all_listeners: List[GatewayListener]) -> List[GatewayL
 
 
 def deduplicate_http_routes(
-    all_http_routes: List[HTTPRoute],
-) -> Tuple[List[HTTPRoute], Set[Tuple[str, str]]]:
+    all_http_routes: List[HTTPRouteResource],
+) -> Tuple[List[HTTPRouteResource], Set[Tuple[str, str]]]:
     """Deduplicate HTTP routes by finding conflicts on (listener_port, listener_protocol, path).
 
     Routes from the same app can share the same path. Routes from different apps cannot.
@@ -599,24 +650,26 @@ def deduplicate_http_routes(
         Tuple of (valid_routes, apps_to_clear, has_conflicts) where:
         - valid_routes: List of non-conflicting routes
         - apps_to_clear: Set of (app_name, relation_name) tuples that have conflicts
-        - has_conflicts: True if any conflicts were detected (caller should set BlockedStatus)
     """
     # Group routes by (listener_port, listener_protocol, path)
     # Extract path from first match in matches list
-    route_groups: Dict[Tuple[int, str, str], List[HTTPRoute]] = defaultdict(list)
+    route_groups: Dict[Tuple[int, str, str], List[HTTPRouteResource]] = defaultdict(list)
 
     for route in all_http_routes:
         # Extract path from first HTTPRouteMatch
-        path = route["matches"][0].path.value if route["matches"] else "/"
-        key = (route["listener_port"], route["listener_protocol"], path)
+        key = (
+              get_listener_port_from_label(route.metadata),
+              get_listener_protocol_from_label(route.metadata),
+              _get_first_rules_first_http_path(route),
+        )
         route_groups[key].append(route)
 
-    valid_routes: List[HTTPRoute] = []
+    valid_routes: List[HTTPRouteResource] = []
     apps_to_clear: Set[Tuple[str, str]] = set()
 
     for key, routes in route_groups.items():
         # Get unique apps requesting this route
-        unique_apps = {(r["source_app"], r["source_relation"]) for r in routes}
+        unique_apps = {get_requesting_app_and_relation_forom_label(r.metadata) for r in routes}
 
         if len(unique_apps) > 1:
             # Conflict detected - multiple apps want the same route
@@ -637,8 +690,8 @@ def deduplicate_http_routes(
 
 
 def deduplicate_grpc_routes(
-    all_grpc_routes: List[GRPCRoute],
-) -> Tuple[List[GRPCRoute], Set[Tuple[str, str]]]:
+    all_grpc_routes: List[GRPCRouteResource],
+) -> Tuple[List[GRPCRouteResource], Set[Tuple[str, str]]]:
     """Deduplicate gRPC routes by finding conflicts on (listener_port, listener_protocol, grpc_path).
 
     Routes from the same app can share the same gRPC path. Routes from different apps cannot.
@@ -697,27 +750,22 @@ def deduplicate_grpc_routes(
     """
     # Group routes by (listener_port, listener_protocol, grpc_path)
     # Extract grpc_path from first match in matches list
-    route_groups: Dict[Tuple[int, str, str], List[GRPCRoute]] = defaultdict(list)
+    route_groups: Dict[Tuple[int, str, str], List[GRPCRouteResource]] = defaultdict(list)
 
     for route in all_grpc_routes:
-        # Extract gRPC path from first GRPCRouteMatch
-        if route["matches"] and route["matches"][0].method:
-            method_match = route["matches"][0].method
-            service = method_match.service or ""
-            method = method_match.method or "*"
-            grpc_path = f"/{service}/{method}"
-        else:
-            grpc_path = "/*"
-
-        key = (route["listener_port"], route["listener_protocol"], grpc_path)
+        key = (
+            get_listener_port_from_label(route.metadata),
+            get_listener_protocol_from_label(route.metadata),
+            _get_first_rules_first_grpc_path(route)
+        )
         route_groups[key].append(route)
 
-    valid_routes: List[GRPCRoute] = []
+    valid_routes: List[GRPCRouteResource] = []
     apps_to_clear: Set[Tuple[str, str]] = set()
 
     for key, routes in route_groups.items():
         # Get unique apps requesting this route
-        unique_apps = {(r["source_app"], r["source_relation"]) for r in routes}
+        unique_apps = {get_requesting_app_and_relation_forom_label(r.metadata) for r in routes}
 
         if len(unique_apps) > 1:
             # Conflict detected - multiple apps want the same route
@@ -894,3 +942,38 @@ def get_relation_by_name_and_app(relations, remote_app_name):
     raise KeyError(f"Could not find relation with remote_app_name={remote_app_name}")
 
 
+def create_gateway_tls_config(tls_secret_name: str) -> GatewayTLSConfig:
+    """Return a simple GatewayTLSConfig object based on the provided tls_secret_name."""
+    return GatewayTLSConfig(certificateRefs=[SecretObjectReference(name=tls_secret_name)])
+
+def _get_first_rules_first_http_path(route: HTTPRouteResource) -> str:
+    matches = route.spec.rules[0].matches
+    return matches[0].path.value if matches else "/"
+
+
+def _get_first_rules_first_grpc_path(route: GRPCRouteResource) -> str:
+    matches = route.spec.rules[0].matches
+    if matches and matches[0].method:
+        method_match = matches[0].method
+        service = method_match.service or ""
+        method = method_match.method or "*"
+        return f"/{service}/{method}"
+    else:
+        return "/*"
+
+def get_listener_port_from_label(metadata: Metadata) -> int:
+    """Extract the listener port from the metadata of a GRPCRouteResource or HTTPRouteResource using its labels."""
+    assert metadata.labels is not None
+    return int(metadata.labels[ROUTE_LISTENER_PORT_LABEL])
+
+def get_listener_protocol_from_label(metadata: Metadata) -> str:
+    """Extract the listener protocol from the metadata of a GRPCRouteResource or HTTPRouteResource using its labels."""
+    assert metadata.labels is not None
+    return str(metadata.labels[ROUTE_LISTENER_PROTOCOL_LABEL])
+
+def get_requesting_app_and_relation_forom_label(metadata: Metadata) -> Tuple[str,str]:
+    """Extract the name of the requesting app and relation from the metadata of a GRPCRouteResource or HTTPRouteResource using its labels."""
+    assert metadata.labels is not None
+    source_app = str(metadata.labels[ROUTE_SOURCE_APP_LABEL])
+    source_relation = str(metadata.labels[ROUTE_SOURCE_RELATION_LABEL])
+    return (source_app,source_relation)
