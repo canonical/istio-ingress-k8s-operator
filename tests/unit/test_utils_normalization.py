@@ -38,6 +38,9 @@ from charmlibs.interfaces.istio_ingress_route import (
 from utils import (
     create_gateway_tls_config,
     deduplicate_listeners,
+    get_listener_port_from_label,
+    get_listener_protocol_from_label,
+    get_requesting_app_and_relation_forom_label,
     get_unauthenticated_paths,
     get_unauthenticated_paths_from_istio_ingress_route_configs,
     normalize_ipa_listeners,
@@ -52,7 +55,7 @@ def test_normalize_ipa_listeners_without_tls():
     """Test normalizing IPA listeners without TLS creates single HTTP listener."""
     tls_secret_name = None
 
-    listeners = normalize_ipa_listeners(tls_secret_name)
+    listeners = normalize_ipa_listeners(tls_secret_name,hostname="example.com")
 
     assert len(listeners) == 1
     assert listeners[0].port == 80
@@ -64,7 +67,7 @@ def test_normalize_ipa_listeners_with_tls():
     """Test normalizing IPA listeners with TLS creates HTTP and HTTPS listeners."""
     tls_secret_name = "my-tls-secret"
 
-    listeners = normalize_ipa_listeners(tls_secret_name)
+    listeners = normalize_ipa_listeners(tls_secret_name,hostname="example.com")
 
     assert len(listeners) == 2
     http_listener = [listener for listener in listeners if listener.port == 80][0]
@@ -114,7 +117,7 @@ def test_normalize_istio_ingress_route_listeners_without_tls():
     tls_secret_name = None
 
     listeners = normalize_istio_ingress_route_listeners(
-        istio_ingress_route_configs, tls_secret_name
+        istio_ingress_route_configs, tls_secret_name, hostname="example.com"
     )
 
     assert len(listeners) == 2
@@ -163,7 +166,7 @@ def test_normalize_istio_ingress_route_listeners_with_tls():
     tls_secret_name = "my-tls-secret"
 
     listeners = normalize_istio_ingress_route_listeners(
-        istio_ingress_route_configs, tls_secret_name
+        istio_ingress_route_configs, tls_secret_name, hostname="example.com"
     )
 
     # Should have 2 listeners converted to HTTPS: 8080 HTTPS, 9090 HTTPS
@@ -218,14 +221,14 @@ def test_normalize_ipa_routes_with_strip_prefix():
     is_tls_enabled = False
     ingress_app_name = "istio-ingress-k8s"
 
-    http_routes = normalize_ipa_routes(ipa_relations, is_tls_enabled, ingress_app_name)
+    http_routes = normalize_ipa_routes(ipa_relations, is_tls_enabled, ingress_app_name, ingress_model_name="xyz")
 
     assert len(http_routes) == 1
     route = http_routes[0]
-    assert route.resource.metadata.name == "svc1-httproute-http-80-istio-ingress-k8s"  # Name format: {service}-httproute-{section_name}-{ingress_app_name}
-    assert route.listener_port == 80
-    assert route.listener_protocol == "HTTP"
-    filters = route.resource.spec.rules[0].filters
+    assert route.metadata.name == "svc1-httproute-http-80-istio-ingress-k8s"  # Name format: {service}-httproute-{section_name}-{ingress_app_name}
+    assert get_listener_port_from_label(route.metadata) == 80
+    assert get_listener_protocol_from_label(route.metadata) == "HTTP"
+    filters = route.spec.rules[0].filters
     assert len(filters) == 1
     assert filters[0].type == FilterType.URLRewrite
 
@@ -248,19 +251,19 @@ def test_normalize_ipa_routes_with_tls_creates_redirect():
     is_tls_enabled = True
     ingress_app_name = "istio-ingress-k8s"
 
-    http_routes = normalize_ipa_routes(ipa_relations, is_tls_enabled, ingress_app_name)
+    http_routes = normalize_ipa_routes(ipa_relations, is_tls_enabled, ingress_app_name, ingress_model_name="xyz")
 
     # Should create 2 routes: HTTP redirect + HTTPS actual
     assert len(http_routes) == 2
 
     # First route should be HTTP redirect
     redirect_route = http_routes[0]
-    assert redirect_route.resource.metadata.name == "svc1-httproute-http-80-istio-ingress-k8s"
-    assert redirect_route.listener_port == 80
-    assert redirect_route.listener_protocol == "HTTP"
-    assert len(redirect_route.resource.spec.rules[0].backendRefs) == 0  # No backends for redirect
+    assert redirect_route.metadata.name == "svc1-httproute-http-80-istio-ingress-k8s"
+    assert get_listener_port_from_label(redirect_route.metadata) == 80
+    assert get_listener_protocol_from_label(redirect_route.metadata) == "HTTP"
+    assert len(redirect_route.spec.rules[0].backendRefs) == 0  # No backends for redirect
 
-    filters = redirect_route.resource.spec.rules[0].filters
+    filters = redirect_route.spec.rules[0].filters
     assert len(filters) == 1
     assert filters[0].type == FilterType.RequestRedirect
     assert filters[0].requestRedirect.scheme == "https"
@@ -268,16 +271,16 @@ def test_normalize_ipa_routes_with_tls_creates_redirect():
 
     # Second route should be HTTPS with backends
     https_route = http_routes[1]
-    assert https_route.resource.metadata.name == "svc1-httproute-https-443-istio-ingress-k8s"
-    assert https_route.listener_port == 443
-    assert https_route.listener_protocol == "HTTPS"
+    assert https_route.metadata.name == "svc1-httproute-https-443-istio-ingress-k8s"
+    assert get_listener_port_from_label(https_route.metadata) == 443
+    assert get_listener_protocol_from_label(https_route.metadata) == "HTTPS"
 
-    backed_refs = https_route.resource.spec.rules[0].backendRefs
+    backed_refs = https_route.spec.rules[0].backendRefs
     assert len(backed_refs) == 1
     assert backed_refs[0].name == "svc1"
     assert backed_refs[0].port == 8080
     # Should have URLRewrite filter because strip_prefix=True
-    filters = https_route.resource.spec.rules[0].filters
+    filters = https_route.spec.rules[0].filters
     assert len(filters) == 1
     assert filters[0].type == FilterType.URLRewrite
 
@@ -319,27 +322,27 @@ def test_normalize_istio_ingress_route_http_and_grpc_routes():
     ingress_app_name = "istio-ingress-k8s"
 
     http_routes = normalize_istio_ingress_route_http_routes(
-        istio_ingress_route_configs, is_tls_enabled, ingress_app_name
+        istio_ingress_route_configs, is_tls_enabled, ingress_app_name, ingress_model_name="xyz"
     )
     grpc_routes = normalize_istio_ingress_route_grpc_routes(
-        istio_ingress_route_configs, is_tls_enabled, ingress_app_name
+        istio_ingress_route_configs, is_tls_enabled, ingress_app_name, ingress_model_name="xyz"
     )
 
     # Verify HTTP route conversion
     assert len(http_routes) == 1
     http_route = http_routes[0]
-    assert http_route.resource.metadata.name == "app1-http-route-httproute-http-8080-istio-ingress-k8s"  # Route name format: {app}-{route.name}-httproute-{section_name}-{ingress_app_name}
-    assert http_route.listener_port == 8080
-    assert http_route.source_relation == "istio-ingress-route"
-    assert len(http_route.resource.spec.rules[0].matches) == 1
+    assert http_route.metadata.name == "app1-http-route-httproute-http-8080-istio-ingress-k8s"  # Route name format: {app}-{route.name}-httproute-{section_name}-{ingress_app_name}
+    assert get_listener_port_from_label(http_route.metadata) == 8080
+    assert get_requesting_app_and_relation_forom_label(http_route.metadata)[1] == "istio-ingress-route"
+    assert len(http_route.spec.rules[0].matches) == 1
 
     # Verify gRPC route conversion
     assert len(grpc_routes) == 1
     grpc_route = grpc_routes[0]
-    assert grpc_route.resource.metadata.name == "app1-grpc-route-grpcroute-http-9090-istio-ingress-k8s"  # Route name format: {app}-{route.name}-grpcroute-{section_name}-{ingress_app_name}
-    assert grpc_route.listener_port == 9090
-    assert grpc_route.source_relation == "istio-ingress-route"
-    assert len(grpc_route.resource.spec.rules[0].matches) == 1
+    assert grpc_route.metadata.name == "app1-grpc-route-grpcroute-http-9090-istio-ingress-k8s"  # Route name format: {app}-{route.name}-grpcroute-{section_name}-{ingress_app_name}
+    assert get_listener_port_from_label(grpc_route.metadata) == 9090
+    assert get_requesting_app_and_relation_forom_label(grpc_route.metadata)[1] == "istio-ingress-route"
+    assert len(grpc_route.spec.rules[0].matches) == 1
 
 
 def test_get_unauthenticated_paths():

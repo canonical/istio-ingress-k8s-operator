@@ -131,7 +131,7 @@ def test_deduplicate_http_routes_with_conflicts():
 
     # Only route3 (/users) should remain
     assert len(valid_routes) == 1
-    assert valid_routes[0].resource.spec.rules[0].matches[0].path.value == "/users"
+    assert valid_routes[0].spec.rules[0].matches[0].path.value == "/users"
 
 
 def test_deduplicate_grpc_routes_no_conflicts():
@@ -223,7 +223,7 @@ def test_deduplicate_grpc_routes_with_conflicts():
 
     # Only route3 (OrderService) should remain
     assert len(valid_routes) == 1
-    assert valid_routes[0].resource.spec.rules[0].matches[0].method.service == "OrderService"
+    assert valid_routes[0].spec.rules[0].matches[0].method.service == "OrderService"
 
 
 def test_clear_conflicting_routes():

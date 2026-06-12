@@ -13,54 +13,59 @@ from canonical_service_mesh.models import (
     Metadata,
 )
 
-from utils import GRPCRoute, HTTPRoute
+from utils import (
+    ROUTE_LISTENER_PORT_LABEL,
+    ROUTE_LISTENER_PROTOCOL_LABEL,
+    ROUTE_SOURCE_APP_LABEL,
+    ROUTE_SOURCE_RELATION_LABEL,
+)
 
 
-def dict_to_httproute(d) -> HTTPRoute :
-    return HTTPRoute(
-        resource=HTTPRouteResource(
-                metadata=Metadata(
-                    name=d["name"],
-                    namespace=d["namespace"],
-                ),
-                spec=HTTPRouteResourceSpec(
-                    parentRefs=[],
-                    rules=[
-                        HTTPRouteRule(
-                            matches=d["matches"],
-                            backendRefs=d["backend_refs"],
-                            filters=d["filters"],
-                        )
-                    ],
-                ),
-            ),
-        listener_port=d["listener_port"],
-        listener_protocol=d["listener_protocol"],
-        source_app=d["source_app"],
-        source_relation=d["source_relation"],
+def dict_to_httproute(d) -> HTTPRouteResource :
+    return HTTPRouteResource(
+        metadata=Metadata(
+            name=d["name"],
+            namespace=d["namespace"],
+            labels={
+                ROUTE_LISTENER_PORT_LABEL: str(d["listener_port"]),
+                ROUTE_LISTENER_PROTOCOL_LABEL: d["listener_protocol"],
+                ROUTE_SOURCE_APP_LABEL: d["source_app"],
+                ROUTE_SOURCE_RELATION_LABEL: d["source_relation"],
+            }
+        ),
+        spec=HTTPRouteResourceSpec(
+            parentRefs = d["parentRefs"] if "parentRefs" in d else [],
+            rules=[
+                HTTPRouteRule(
+                    matches=d["matches"],
+                    backendRefs=d["backend_refs"],
+                    filters=d["filters"],
+                )
+            ],
+        ),
     )
 
 
-def dict_to_grpcroute(d) -> GRPCRoute:
-    return GRPCRoute(
-        resource=GRPCRouteResource(
-            metadata=Metadata(
-                name=d["name"],
-                namespace=d["namespace"],
-            ),
-            spec=GRPCRouteResourceSpec(
-                parentRefs=[],
-                rules=[
-                    GRPCRouteRule(
-                        matches=d["matches"],
-                        backendRefs=d["backend_refs"],
-                        filters=d["filters"] if "filters" in d and d["filters"] else None,
-                    )
-                ],
-            ),
+def dict_to_grpcroute(d) -> GRPCRouteResource:
+    return GRPCRouteResource(
+        metadata=Metadata(
+            name=d["name"],
+            namespace=d["namespace"],
+            labels={
+                ROUTE_LISTENER_PORT_LABEL: str(d["listener_port"]),
+                ROUTE_LISTENER_PROTOCOL_LABEL: d["listener_protocol"],
+                ROUTE_SOURCE_APP_LABEL: d["source_app"],
+                ROUTE_SOURCE_RELATION_LABEL: d["source_relation"],
+            }
         ),
-        listener_port=d["listener_port"],
-        listener_protocol=d["listener_protocol"],
-        source_app=d["source_app"],
-        source_relation=d["source_relation"],
+        spec=GRPCRouteResourceSpec(
+            parentRefs=[], # TODO
+            rules=[
+                GRPCRouteRule(
+                    matches=d["matches"],
+                    backendRefs=d["backend_refs"],
+                    filters=d["filters"] if "filters" in d and d["filters"] else None,
+                )
+            ],
+        ),
     )

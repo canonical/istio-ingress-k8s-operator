@@ -11,6 +11,7 @@ from canonical_service_mesh.models import (
     GRPCRouteMatch,
     HTTPPathMatch,
     HTTPRouteMatch,
+    ParentRef,
 )
 from charmlibs.interfaces.istio_ingress_route import (
     RequestRedirectFilter,
@@ -49,6 +50,7 @@ def create_test_http_routes(routes_info, with_tls=False):
                             requestRedirect=RequestRedirectSpec(scheme="https", statusCode=301)
                         )
                     ],
+                    "parentRefs": [ParentRef(name="fake-ingress_app_name",namespace="fake-ingress_model_name",sectionName='http-80')],
                 })
             )
             # HTTPS route on port 443 with actual backend
@@ -73,6 +75,7 @@ def create_test_http_routes(routes_info, with_tls=False):
                         )
                     ],
                     "filters": [],
+                    "parentRefs": [ParentRef(name="fake-ingress_app_name",namespace="fake-ingress_model_name",sectionName='https-443')],
                 })
             )
         else:
@@ -98,6 +101,7 @@ def create_test_http_routes(routes_info, with_tls=False):
                         )
                     ],
                     "filters": [],
+                    "parentRefs": [ParentRef(name="fake-ingress_app_name",namespace="fake-ingress_model_name",sectionName='http-80')],
                 })
             )
     return http_routes

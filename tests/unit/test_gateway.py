@@ -26,7 +26,7 @@ from utils import create_gateway_tls_config
 
 
 def create_test_listeners(
-    ports=(80,), protocols=("HTTP",), tls_secret_names=(None,), source_apps=("test-app",)
+    ports=(80,), protocols=("HTTP",), tls_secret_names=(None,), source_apps=("test-app",), hostname=None
 ):
     """Create normalized Listener list for testing."""
     max_len = max(len(ports), len(protocols), len(tls_secret_names), len(source_apps))
@@ -37,10 +37,11 @@ def create_test_listeners(
 
     return [
         Listener(
-            name=source_app,
+            name=f"{protocol.lower()}-{port}",
             port=port,
             protocol=protocol,
             allowedRoutes=AllowedRoutes(namespaces={}),
+            hostname=hostname,
             tls=create_gateway_tls_config(tls_secret_name) if tls_secret_name else None,
         )
         for port, protocol, tls_secret_name, source_app in zip(
@@ -81,8 +82,9 @@ def test_construct_gateway_with_loadbalancer_address(
         state=scenario.State(),
     ) as manager:
         charm = manager.charm
-        normalized_listeners = create_test_listeners()
+        normalized_listeners = create_test_listeners(hostname=charm._get_hostname_from_local_gateway_address())
         gateway = charm._construct_gateway(normalized_listeners)
+        print(gateway)
 
         # Assert that the Gateway has an http listener with the correct configurations
         _validate_gateway_listener(gateway, "http-80", hostname, tls_secret_name=None)
@@ -109,6 +111,7 @@ def test_construct_gateway_with_tls(
             ports=(80, 443),
             protocols=("HTTP", "HTTPS"),
             tls_secret_names=(None, tls_secret_name),
+            hostname=charm._get_hostname_from_local_gateway_address()
         )
         gateway = charm._construct_gateway(normalized_listeners)
 
@@ -195,6 +198,7 @@ def test_sync_gateway_resources_with_tls_with_loadbalancer_address(
             ports=(80, 443),
             protocols=("HTTP", "HTTPS"),
             tls_secret_names=(None, charm._certificate_secret_name),
+            hostname=charm._get_hostname_from_local_gateway_address()
         )
         charm._sync_gateway_resources(normalized_listeners)
 
@@ -234,6 +238,7 @@ def test_sync_gateway_resources_with_tls_with_external_hostname_config(
             ports=(80, 443),
             protocols=("HTTP", "HTTPS"),
             tls_secret_names=(None, charm._certificate_secret_name),
+            hostname=charm._get_hostname_from_local_gateway_address()
         )
         charm._sync_gateway_resources(normalized_listeners)
 
